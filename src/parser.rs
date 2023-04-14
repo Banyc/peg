@@ -285,7 +285,11 @@ impl PegParser {
     pub fn new() -> Self {
         let lexer = Box::new(lexer());
         let parser = Box::new(parser());
-        let expr_parser = Box::new(expr_parser());
+        let expr_parser = expr_parser().then_ignore(just(Token::End)).map(|mut expr| {
+            expr.set_atom_indices(0);
+            expr
+        });
+        let expr_parser = Box::new(expr_parser);
         Self {
             lexer,
             parser,
@@ -505,5 +509,29 @@ mod tests {
         let var = Var("D".into());
         assert_eq!(rules.get(&var), rules_expected.get(&var));
         assert_eq!(rules, rules_expected);
+    }
+
+    #[test]
+    fn top_level_expr() {
+        let top_level_expr = "
+            '(' '1' ')'
+        ";
+        let parser = PegParser::new();
+        let expr = parser.parse_expr(top_level_expr).unwrap();
+        let expected_expr = Expr::Sequence(vec![
+            Expr::Atom {
+                inner: Atom::Literal("(".into()),
+                index: 0,
+            },
+            Expr::Atom {
+                inner: Atom::Literal("1".into()),
+                index: 1,
+            },
+            Expr::Atom {
+                inner: Atom::Literal(")".into()),
+                index: 2,
+            },
+        ]);
+        assert_eq!(expr, expected_expr);
     }
 }
