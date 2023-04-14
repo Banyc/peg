@@ -206,6 +206,8 @@ pub enum Atom {
     Literal(String),
     /// `$`
     End,
+    /// `.`
+    Any,
 }
 
 impl Atom {
@@ -241,6 +243,16 @@ impl Atom {
                     EvalResult::NotMatched
                 }
             }
+            Atom::Any => {
+                if ctx.src.len() == ctx.src_pos {
+                    EvalResult::NotMatched
+                } else {
+                    // Consume the input
+                    ctx.src_pos += 1;
+
+                    EvalResult::Matched
+                }
+            }
         }
     }
 }
@@ -274,12 +286,13 @@ pub struct AtomMatch {
 mod tests {
     use super::*;
 
-    /// S <- A / B / C / D / E
+    /// S <- A / B / C / D / E / F
     /// A <- "a" $
     /// B <- "b"
     /// C <- "c_" "em" empty "pty"
     /// D <- "d" "_repeat"+
     /// E <- "e_" !"foobar" "bar"
+    /// F <- "f" ..
     fn rule() -> RuleSet {
         let mut rules = HashMap::new();
         rules.insert(
@@ -304,6 +317,10 @@ mod tests {
                 Expr::Atom {
                     inner: Atom::Var(Var("E".into())),
                     index: 4,
+                },
+                Expr::Atom {
+                    inner: Atom::Var(Var("F".into())),
+                    index: 5,
                 },
             ])]),
         );
@@ -379,6 +396,23 @@ mod tests {
                 },
                 Expr::Atom {
                     inner: Atom::Literal("bar".into()),
+                    index: 2,
+                },
+            ]),
+        );
+        rules.insert(
+            Var("F".into()),
+            Expr::Sequence(vec![
+                Expr::Atom {
+                    inner: Atom::Literal("f".into()),
+                    index: 0,
+                },
+                Expr::Atom {
+                    inner: Atom::Any,
+                    index: 1,
+                },
+                Expr::Atom {
+                    inner: Atom::Any,
                     index: 2,
                 },
             ]),
@@ -615,6 +649,49 @@ mod tests {
                         index: 4
                     },
                     src_pos: 0..5
+                }
+            ]
+        );
+    }
+
+    #[test]
+    fn any() {
+        let rule = rule();
+        let src = "f_f".to_string();
+        let src = src.chars().collect::<Vec<_>>();
+        let (src_read, eval, matches) = rule.eval(&src);
+        assert_eq!(src_read, src.len());
+        assert_eq!(eval, EvalResult::Matched);
+        assert_eq!(
+            matches,
+            vec![
+                AtomMatch {
+                    rule_pos: RulePosition {
+                        var: Var("F".into()),
+                        index: 0,
+                    },
+                    src_pos: 0..1,
+                },
+                AtomMatch {
+                    rule_pos: RulePosition {
+                        var: Var("F".into()),
+                        index: 1,
+                    },
+                    src_pos: 1..2,
+                },
+                AtomMatch {
+                    rule_pos: RulePosition {
+                        var: Var("F".into()),
+                        index: 2,
+                    },
+                    src_pos: 2..3,
+                },
+                AtomMatch {
+                    rule_pos: RulePosition {
+                        var: Var("S".into()),
+                        index: 5
+                    },
+                    src_pos: 0..3
                 }
             ]
         );

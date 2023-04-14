@@ -168,12 +168,13 @@ fn expr_parser() -> impl Parser<Token, Expr, Error = Simple<Token>> {
     let var = var_parser();
 
     let expr = recursive(|expr| {
-        // atom <- var / string / dollar
+        // atom <- var / string / dollar / dot
         let atom = choice((
             var.map(Atom::Var),
             filter(|t: &Token| matches!(t, Token::String(_)))
                 .map(|t: Token| Atom::Literal(t.into_string().unwrap())),
             just(Token::Dollar).map(|_| Atom::End),
+            just(Token::Dot).map(|_| Atom::Any),
         ))
         .map(|atom: Atom| Expr::Atom {
             inner: atom,
