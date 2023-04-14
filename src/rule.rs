@@ -191,6 +191,8 @@ pub enum Atom {
     Literal {
         value: String,
     },
+    /// `$`
+    End,
 }
 
 impl Atom {
@@ -214,6 +216,13 @@ impl Atom {
                     let end = ctx.src_pos + value.len();
                     ctx.src_pos = end;
 
+                    EvalResult::Matched
+                } else {
+                    EvalResult::NotMatched
+                }
+            }
+            Atom::End => {
+                if ctx.src.len() == ctx.src_pos {
                     EvalResult::Matched
                 } else {
                     EvalResult::NotMatched
@@ -253,7 +262,7 @@ mod tests {
     use super::*;
 
     /// S <- A / B / C / D / E
-    /// A <- "a"
+    /// A <- "a" $
     /// B <- "b"
     /// C <- "c_" "em" empty "pty"
     /// D <- "d" "_repeat"+
@@ -297,10 +306,16 @@ mod tests {
         );
         rules.insert(
             Var("A".into()),
-            Rule(Expr::Sequence(vec![Expr::Atom {
-                inner: Atom::Literal { value: "a".into() },
-                index: 0,
-            }])),
+            Rule(Expr::Sequence(vec![
+                Expr::Atom {
+                    inner: Atom::Literal { value: "a".into() },
+                    index: 0,
+                },
+                Expr::Atom {
+                    inner: Atom::End,
+                    index: 1,
+                },
+            ])),
         );
         rules.insert(
             Var("B".into()),
@@ -393,6 +408,13 @@ mod tests {
                         index: 0,
                     },
                     src_pos: 0..1,
+                },
+                Match {
+                    rule_pos: RulePosition {
+                        var: Var("A".into()),
+                        index: 1,
+                    },
+                    src_pos: 1..1,
                 },
                 Match {
                     rule_pos: RulePosition {
