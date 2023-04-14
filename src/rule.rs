@@ -119,17 +119,11 @@ pub enum Predicate {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ExprOnce {
-    Var {
-        name: Var,
-        index: usize,
-    },
     Choice(Vec<Expr>),
-    /// Terminal
-    LiteralString {
-        value: String,
+    Atom {
         index: usize,
+        inner: Atom,
     },
-    /// Sequence delimited by parentheses
     Sequence(Vec<Expr>),
     Predicate {
         predicate: Predicate,
@@ -140,15 +134,9 @@ pub enum ExprOnce {
 impl ExprOnce {
     pub fn eval(&self, ctx: &mut EvalContext) -> EvalResult {
         match self {
-            ExprOnce::Var { name, index } => {
+            ExprOnce::Atom { index, inner } => {
                 let src_pos = ctx.src_pos;
-                let rule = ctx.rule_set.rule(name).unwrap();
-                let rule_pos = ctx.rule.clone();
-                ctx.rule = name.clone();
-                let eval = rule.eval(ctx);
-
-                // Restore the rule position
-                ctx.rule = rule_pos;
+                let eval = inner.eval(ctx);
 
                 if eval == EvalResult::Matched {
                     // Save the match
@@ -174,28 +162,6 @@ impl ExprOnce {
                 }
                 EvalResult::NotMatched
             }
-            ExprOnce::LiteralString { value, index } => {
-                if ctx.src[ctx.src_pos..].starts_with(value.chars().collect::<Vec<_>>().as_slice())
-                {
-                    let end = ctx.src_pos + value.len();
-
-                    // Save the match
-                    ctx.matches.push(Match {
-                        rule_pos: RulePosition {
-                            var: ctx.rule.clone(),
-                            index: *index,
-                        },
-                        src_pos: ctx.src_pos..end,
-                    });
-
-                    // Consume the input
-                    ctx.src_pos = end;
-
-                    EvalResult::Matched
-                } else {
-                    EvalResult::NotMatched
-                }
-            }
             ExprOnce::Sequence(sequence) => {
                 for expr in sequence {
                     let eval = expr.eval(ctx);
@@ -215,6 +181,47 @@ impl ExprOnce {
                         EvalResult::Matched => EvalResult::NotMatched,
                         EvalResult::NotMatched => EvalResult::Matched,
                     },
+                }
+            }
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Atom {
+    Var {
+        name: Var,
+    },
+    /// Terminal
+    Literal {
+        value: String,
+    },
+}
+
+impl Atom {
+    pub fn eval(&self, ctx: &mut EvalContext) -> EvalResult {
+        match self {
+            Atom::Var { name } => {
+                let rule_set = ctx.rule_set.rule(name).unwrap();
+                let rule = ctx.rule.clone();
+                ctx.rule = name.clone();
+                let eval = rule_set.eval(ctx);
+
+                // Restore the rule position
+                ctx.rule = rule;
+
+                eval
+            }
+            Atom::Literal { value } => {
+                if ctx.src[ctx.src_pos..].starts_with(value.chars().collect::<Vec<_>>().as_slice())
+                {
+                    // Consume the input
+                    let end = ctx.src_pos + value.len();
+                    ctx.src_pos = end;
+
+                    EvalResult::Matched
+                } else {
+                    EvalResult::NotMatched
                 }
             }
         }
@@ -264,36 +271,46 @@ mod tests {
                 once: ExprOnce::Sequence(vec![Expr {
                     once: ExprOnce::Choice(vec![
                         Expr {
-                            once: ExprOnce::Var {
-                                name: Var("A".into()),
+                            once: ExprOnce::Atom {
+                                inner: Atom::Var {
+                                    name: Var("A".into()),
+                                },
                                 index: 0,
                             },
                             repeat: RepeatRange::new(1, RepeatRangeEnd::Finite(1)),
                         },
                         Expr {
-                            once: ExprOnce::Var {
-                                name: Var("B".into()),
+                            once: ExprOnce::Atom {
+                                inner: Atom::Var {
+                                    name: Var("B".into()),
+                                },
                                 index: 1,
                             },
                             repeat: RepeatRange::new(1, RepeatRangeEnd::Finite(1)),
                         },
                         Expr {
-                            once: ExprOnce::Var {
-                                name: Var("C".into()),
+                            once: ExprOnce::Atom {
+                                inner: Atom::Var {
+                                    name: Var("C".into()),
+                                },
                                 index: 2,
                             },
                             repeat: RepeatRange::new(1, RepeatRangeEnd::Finite(1)),
                         },
                         Expr {
-                            once: ExprOnce::Var {
-                                name: Var("D".into()),
+                            once: ExprOnce::Atom {
+                                inner: Atom::Var {
+                                    name: Var("D".into()),
+                                },
                                 index: 3,
                             },
                             repeat: RepeatRange::new(1, RepeatRangeEnd::Finite(1)),
                         },
                         Expr {
-                            once: ExprOnce::Var {
-                                name: Var("E".into()),
+                            once: ExprOnce::Atom {
+                                inner: Atom::Var {
+                                    name: Var("E".into()),
+                                },
                                 index: 4,
                             },
                             repeat: RepeatRange::new(1, RepeatRangeEnd::Finite(1)),
@@ -308,8 +325,8 @@ mod tests {
             Var("A".into()),
             Rule(Expr {
                 once: ExprOnce::Sequence(vec![Expr {
-                    once: ExprOnce::LiteralString {
-                        value: "a".into(),
+                    once: ExprOnce::Atom {
+                        inner: Atom::Literal { value: "a".into() },
                         index: 0,
                     },
                     repeat: RepeatRange::new(1, RepeatRangeEnd::Finite(1)),
@@ -321,8 +338,8 @@ mod tests {
             Var("B".into()),
             Rule(Expr {
                 once: ExprOnce::Sequence(vec![Expr {
-                    once: ExprOnce::LiteralString {
-                        value: "b".into(),
+                    once: ExprOnce::Atom {
+                        inner: Atom::Literal { value: "b".into() },
                         index: 0,
                     },
                     repeat: RepeatRange::new(1, RepeatRangeEnd::Finite(1)),
@@ -335,15 +352,15 @@ mod tests {
             Rule(Expr {
                 once: ExprOnce::Sequence(vec![
                     Expr {
-                        once: ExprOnce::LiteralString {
-                            value: "c_".into(),
+                        once: ExprOnce::Atom {
+                            inner: Atom::Literal { value: "c_".into() },
                             index: 0,
                         },
                         repeat: RepeatRange::new(1, RepeatRangeEnd::Finite(1)),
                     },
                     Expr {
-                        once: ExprOnce::LiteralString {
-                            value: "em".into(),
+                        once: ExprOnce::Atom {
+                            inner: Atom::Literal { value: "em".into() },
                             index: 1,
                         },
                         repeat: RepeatRange::new(1, RepeatRangeEnd::Finite(1)),
@@ -353,8 +370,10 @@ mod tests {
                         repeat: RepeatRange::new(1, RepeatRangeEnd::Finite(1)),
                     },
                     Expr {
-                        once: ExprOnce::LiteralString {
-                            value: "pty".into(),
+                        once: ExprOnce::Atom {
+                            inner: Atom::Literal {
+                                value: "pty".into(),
+                            },
                             index: 2,
                         },
                         repeat: RepeatRange::new(1, RepeatRangeEnd::Finite(1)),
@@ -368,15 +387,17 @@ mod tests {
             Rule(Expr {
                 once: ExprOnce::Sequence(vec![
                     Expr {
-                        once: ExprOnce::LiteralString {
-                            value: "d".into(),
+                        once: ExprOnce::Atom {
+                            inner: Atom::Literal { value: "d".into() },
                             index: 0,
                         },
                         repeat: RepeatRange::new(1, RepeatRangeEnd::Finite(1)),
                     },
                     Expr {
-                        once: ExprOnce::LiteralString {
-                            value: "_repeat".into(),
+                        once: ExprOnce::Atom {
+                            inner: Atom::Literal {
+                                value: "_repeat".into(),
+                            },
                             index: 1,
                         },
                         repeat: RepeatRange::new(1, RepeatRangeEnd::Infinite),
@@ -390,8 +411,8 @@ mod tests {
             Rule(Expr {
                 once: ExprOnce::Sequence(vec![
                     Expr {
-                        once: ExprOnce::LiteralString {
-                            value: "e_".into(),
+                        once: ExprOnce::Atom {
+                            inner: Atom::Literal { value: "e_".into() },
                             index: 0,
                         },
                         repeat: RepeatRange::new(1, RepeatRangeEnd::Finite(1)),
@@ -399,8 +420,10 @@ mod tests {
                     Expr {
                         once: ExprOnce::Predicate {
                             inner: Expr {
-                                once: ExprOnce::LiteralString {
-                                    value: "foobar".into(),
+                                once: ExprOnce::Atom {
+                                    inner: Atom::Literal {
+                                        value: "foobar".into(),
+                                    },
                                     index: 1,
                                 },
                                 repeat: RepeatRange::new(1, RepeatRangeEnd::Finite(1)),
@@ -411,8 +434,10 @@ mod tests {
                         repeat: RepeatRange::new(1, RepeatRangeEnd::Finite(1)),
                     },
                     Expr {
-                        once: ExprOnce::LiteralString {
-                            value: "bar".into(),
+                        once: ExprOnce::Atom {
+                            inner: Atom::Literal {
+                                value: "bar".into(),
+                            },
                             index: 2,
                         },
                         repeat: RepeatRange::new(1, RepeatRangeEnd::Finite(1)),
