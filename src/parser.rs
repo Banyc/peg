@@ -258,6 +258,11 @@ fn parser() -> impl Parser<Token, HashMap<Var, Expr>, Error = Simple<Token>> {
     rules
 }
 
+pub struct PegParser {
+    lexer: Box<dyn Parser<char, Vec<Token>, Error = Simple<char>>>,
+    parser: Box<dyn Parser<Token, HashMap<Var, Expr>, Error = Simple<Token>>>,
+}
+
 #[derive(Debug, Error, Clone, PartialEq, Eq)]
 pub enum Error {
     #[error("parse error")]
@@ -266,14 +271,22 @@ pub enum Error {
     Lexer(Vec<Simple<char>>),
 }
 
-pub fn parse(src: &str) -> Result<HashMap<Var, Expr>, Error> {
-    let tokens = match lexer().parse(src) {
-        Ok(tokens) => tokens,
-        Err(e) => return Err(Error::Lexer(e)),
-    };
-    match parser().parse(tokens) {
-        Ok(rules) => Ok(rules),
-        Err(e) => Err(Error::Parser(e)),
+impl PegParser {
+    pub fn new() -> Self {
+        let lexer = Box::new(lexer());
+        let parser = Box::new(parser());
+        Self { lexer, parser }
+    }
+
+    pub fn parse(&self, src: &str) -> Result<HashMap<Var, Expr>, Error> {
+        let tokens = self.lexer.parse(src).map_err(Error::Lexer)?;
+        self.parser.parse(tokens).map_err(Error::Parser)
+    }
+}
+
+impl Default for PegParser {
+    fn default() -> Self {
+        Self::new()
     }
 }
 
@@ -357,7 +370,8 @@ mod tests {
         D <- 'd' '_repeat'+ ;
         E <- 'e_' !'foobar' 'bar' ;
         ";
-        let rules = parse(input).unwrap();
+        let parser = PegParser::new();
+        let rules = parser.parse(input).unwrap();
         let mut rules_expected = HashMap::new();
         rules_expected.insert(
             Var("S".into()),
