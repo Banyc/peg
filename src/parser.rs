@@ -157,12 +157,15 @@ fn lexer() -> impl Parser<char, Vec<Token>, Error = Simple<char>> {
     )
 }
 
-fn parser() -> impl Parser<Token, HashMap<Var, Expr>, Error = Simple<Token>> {
+fn var_parser() -> impl Parser<Token, Var, Error = Simple<Token>> + Clone {
+    // var <- ident
+    filter(|t: &Token| matches!(t, Token::Ident(_))).map(|t: Token| Var(t.into_ident().unwrap()))
+}
+
+fn expr_parser() -> impl Parser<Token, Expr, Error = Simple<Token>> {
     // empty <- "empty"
     let empty = just(Token::Ident("empty".to_string())).map(|_| Expr::Sequence(vec![]));
-    // var <- ident
-    let var = filter(|t: &Token| matches!(t, Token::Ident(_)))
-        .map(|t: Token| Var(t.into_ident().unwrap()));
+    let var = var_parser();
 
     let expr = recursive(|expr| {
         // atom <- var / string / dollar
@@ -240,6 +243,12 @@ fn parser() -> impl Parser<Token, HashMap<Var, Expr>, Error = Simple<Token>> {
         #[allow(clippy::let_and_return)]
         choice
     });
+    expr
+}
+
+fn parser() -> impl Parser<Token, HashMap<Var, Expr>, Error = Simple<Token>> {
+    let var = var_parser();
+    let expr = expr_parser();
     // rule <- var (left_arrow / colon) expr semicolon
     let rule = var
         .then_ignore(choice((just(Token::LeftArrow), just(Token::Colon))))
@@ -261,6 +270,7 @@ fn parser() -> impl Parser<Token, HashMap<Var, Expr>, Error = Simple<Token>> {
 pub struct PegParser {
     lexer: Box<dyn Parser<char, Vec<Token>, Error = Simple<char>>>,
     parser: Box<dyn Parser<Token, HashMap<Var, Expr>, Error = Simple<Token>>>,
+    expr_parser: Box<dyn Parser<Token, Expr, Error = Simple<Token>>>,
 }
 
 #[derive(Debug, Error, Clone, PartialEq, Eq)]
@@ -275,12 +285,22 @@ impl PegParser {
     pub fn new() -> Self {
         let lexer = Box::new(lexer());
         let parser = Box::new(parser());
-        Self { lexer, parser }
+        let expr_parser = Box::new(expr_parser());
+        Self {
+            lexer,
+            parser,
+            expr_parser,
+        }
     }
 
     pub fn parse(&self, src: &str) -> Result<HashMap<Var, Expr>, Error> {
         let tokens = self.lexer.parse(src).map_err(Error::Lexer)?;
         self.parser.parse(tokens).map_err(Error::Parser)
+    }
+
+    pub fn parse_expr(&self, src: &str) -> Result<Expr, Error> {
+        let tokens = self.lexer.parse(src).map_err(Error::Lexer)?;
+        self.expr_parser.parse(tokens).map_err(Error::Parser)
     }
 }
 
