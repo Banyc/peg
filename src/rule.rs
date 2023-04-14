@@ -46,7 +46,7 @@ impl Rule {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct RepeatRange {
     start: usize,
     end: RepeatRangeEnd,
@@ -61,7 +61,7 @@ impl RepeatRange {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub enum RepeatRangeEnd {
     Finite(usize),
     Infinite,
@@ -184,13 +184,9 @@ impl Expr {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Atom {
-    Var {
-        name: Var,
-    },
+    Var(Var),
     /// Terminal
-    Literal {
-        value: String,
-    },
+    Literal(String),
     /// `$`
     End,
 }
@@ -198,7 +194,7 @@ pub enum Atom {
 impl Atom {
     pub fn eval(&self, ctx: &mut EvalContext) -> EvalResult {
         match self {
-            Atom::Var { name } => {
+            Atom::Var(name) => {
                 let rule_set = ctx.rule_set.rule(name).unwrap();
                 let rule = ctx.rule.clone();
                 ctx.rule = name.clone();
@@ -209,7 +205,7 @@ impl Atom {
 
                 eval
             }
-            Atom::Literal { value } => {
+            Atom::Literal(value) => {
                 if ctx.src[ctx.src_pos..].starts_with(value.chars().collect::<Vec<_>>().as_slice())
                 {
                     // Consume the input
@@ -273,33 +269,23 @@ mod tests {
             Var("S".into()),
             Rule(Expr::Sequence(vec![Expr::Choice(vec![
                 Expr::Atom {
-                    inner: Atom::Var {
-                        name: Var("A".into()),
-                    },
+                    inner: Atom::Var(Var("A".into())),
                     index: 0,
                 },
                 Expr::Atom {
-                    inner: Atom::Var {
-                        name: Var("B".into()),
-                    },
+                    inner: Atom::Var(Var("B".into())),
                     index: 1,
                 },
                 Expr::Atom {
-                    inner: Atom::Var {
-                        name: Var("C".into()),
-                    },
+                    inner: Atom::Var(Var("C".into())),
                     index: 2,
                 },
                 Expr::Atom {
-                    inner: Atom::Var {
-                        name: Var("D".into()),
-                    },
+                    inner: Atom::Var(Var("D".into())),
                     index: 3,
                 },
                 Expr::Atom {
-                    inner: Atom::Var {
-                        name: Var("E".into()),
-                    },
+                    inner: Atom::Var(Var("E".into())),
                     index: 4,
                 },
             ])])),
@@ -308,7 +294,7 @@ mod tests {
             Var("A".into()),
             Rule(Expr::Sequence(vec![
                 Expr::Atom {
-                    inner: Atom::Literal { value: "a".into() },
+                    inner: Atom::Literal("a".into()),
                     index: 0,
                 },
                 Expr::Atom {
@@ -320,7 +306,7 @@ mod tests {
         rules.insert(
             Var("B".into()),
             Rule(Expr::Sequence(vec![Expr::Atom {
-                inner: Atom::Literal { value: "b".into() },
+                inner: Atom::Literal("b".into()),
                 index: 0,
             }])),
         );
@@ -328,18 +314,16 @@ mod tests {
             Var("C".into()),
             Rule(Expr::Sequence(vec![
                 Expr::Atom {
-                    inner: Atom::Literal { value: "c_".into() },
+                    inner: Atom::Literal("c_".into()),
                     index: 0,
                 },
                 Expr::Atom {
-                    inner: Atom::Literal { value: "em".into() },
+                    inner: Atom::Literal("em".into()),
                     index: 1,
                 },
                 Expr::Sequence(vec![]),
                 Expr::Atom {
-                    inner: Atom::Literal {
-                        value: "pty".into(),
-                    },
+                    inner: Atom::Literal("pty".into()),
                     index: 2,
                 },
             ])),
@@ -348,14 +332,12 @@ mod tests {
             Var("D".into()),
             Rule(Expr::Sequence(vec![
                 Expr::Atom {
-                    inner: Atom::Literal { value: "d".into() },
+                    inner: Atom::Literal("d".into()),
                     index: 0,
                 },
                 Expr::Repeat {
                     inner: Expr::Atom {
-                        inner: Atom::Literal {
-                            value: "_repeat".into(),
-                        },
+                        inner: Atom::Literal("_repeat".into()),
                         index: 1,
                     }
                     .into(),
@@ -367,23 +349,19 @@ mod tests {
             Var("E".into()),
             Rule(Expr::Sequence(vec![
                 Expr::Atom {
-                    inner: Atom::Literal { value: "e_".into() },
+                    inner: Atom::Literal("e_".into()),
                     index: 0,
                 },
                 Expr::Predicate {
                     inner: Expr::Atom {
-                        inner: Atom::Literal {
-                            value: "foobar".into(),
-                        },
+                        inner: Atom::Literal("foobar".into()),
                         index: 1,
                     }
                     .into(),
                     predicate: Predicate::Not,
                 },
                 Expr::Atom {
-                    inner: Atom::Literal {
-                        value: "bar".into(),
-                    },
+                    inner: Atom::Literal("bar".into()),
                     index: 2,
                 },
             ])),
