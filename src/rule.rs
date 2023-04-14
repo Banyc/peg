@@ -7,16 +7,16 @@ use tracing::trace;
 pub struct Var(pub String);
 
 pub struct RuleSet {
-    rules: HashMap<Var, Rule>,
+    rules: HashMap<Var, Expr>,
     start: Var,
 }
 
 impl RuleSet {
-    pub fn new(rules: HashMap<Var, Rule>, start: Var) -> Self {
+    pub fn new(rules: HashMap<Var, Expr>, start: Var) -> Self {
         Self { rules, start }
     }
 
-    pub fn rule(&self, var: &Var) -> Option<&Rule> {
+    pub fn expr(&self, var: &Var) -> Option<&Expr> {
         self.rules.get(var)
     }
 
@@ -25,7 +25,7 @@ impl RuleSet {
     }
 
     pub fn eval(&self, src: &[char]) -> (usize, EvalResult, Vec<Match>) {
-        let rule = self.rule(&self.start).unwrap();
+        let rule = self.expr(&self.start).unwrap();
         let mut ctx = EvalContext {
             src_pos: 0,
             src,
@@ -35,14 +35,6 @@ impl RuleSet {
         };
         let eval = rule.eval(&mut ctx);
         (ctx.src_pos, eval, ctx.matches)
-    }
-}
-
-pub struct Rule(pub Expr);
-
-impl Rule {
-    pub fn eval(&self, ctx: &mut EvalContext) -> EvalResult {
-        self.0.eval(ctx)
     }
 }
 
@@ -180,6 +172,31 @@ impl Expr {
             }
         }
     }
+
+    pub fn set_atom_indices(&mut self, next: usize) -> usize {
+        match self {
+            Expr::Atom { index, .. } => {
+                *index = next;
+                next + 1
+            }
+            Expr::Choice(choice) => {
+                let mut next = next;
+                for expr in choice {
+                    next = expr.set_atom_indices(next);
+                }
+                next
+            }
+            Expr::Sequence(sequence) => {
+                let mut next = next;
+                for expr in sequence {
+                    next = expr.set_atom_indices(next);
+                }
+                next
+            }
+            Expr::Predicate { inner, .. } => inner.set_atom_indices(next),
+            Expr::Repeat { inner, .. } => inner.set_atom_indices(next),
+        }
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -195,7 +212,7 @@ impl Atom {
     pub fn eval(&self, ctx: &mut EvalContext) -> EvalResult {
         match self {
             Atom::Var(name) => {
-                let rule_set = ctx.rule_set.rule(name).unwrap();
+                let rule_set = ctx.rule_set.expr(name).unwrap();
                 let rule = ctx.rule.clone();
                 ctx.rule = name.clone();
                 let eval = rule_set.eval(ctx);
@@ -267,7 +284,7 @@ mod tests {
         let mut rules = HashMap::new();
         rules.insert(
             Var("S".into()),
-            Rule(Expr::Sequence(vec![Expr::Choice(vec![
+            Expr::Sequence(vec![Expr::Choice(vec![
                 Expr::Atom {
                     inner: Atom::Var(Var("A".into())),
                     index: 0,
@@ -288,11 +305,11 @@ mod tests {
                     inner: Atom::Var(Var("E".into())),
                     index: 4,
                 },
-            ])])),
+            ])]),
         );
         rules.insert(
             Var("A".into()),
-            Rule(Expr::Sequence(vec![
+            Expr::Sequence(vec![
                 Expr::Atom {
                     inner: Atom::Literal("a".into()),
                     index: 0,
@@ -301,18 +318,18 @@ mod tests {
                     inner: Atom::End,
                     index: 1,
                 },
-            ])),
+            ]),
         );
         rules.insert(
             Var("B".into()),
-            Rule(Expr::Sequence(vec![Expr::Atom {
+            Expr::Sequence(vec![Expr::Atom {
                 inner: Atom::Literal("b".into()),
                 index: 0,
-            }])),
+            }]),
         );
         rules.insert(
             Var("C".into()),
-            Rule(Expr::Sequence(vec![
+            Expr::Sequence(vec![
                 Expr::Atom {
                     inner: Atom::Literal("c_".into()),
                     index: 0,
@@ -326,11 +343,11 @@ mod tests {
                     inner: Atom::Literal("pty".into()),
                     index: 2,
                 },
-            ])),
+            ]),
         );
         rules.insert(
             Var("D".into()),
-            Rule(Expr::Sequence(vec![
+            Expr::Sequence(vec![
                 Expr::Atom {
                     inner: Atom::Literal("d".into()),
                     index: 0,
@@ -343,11 +360,11 @@ mod tests {
                     .into(),
                     range: RepeatRange::new(1, RepeatRangeEnd::Infinite),
                 },
-            ])),
+            ]),
         );
         rules.insert(
             Var("E".into()),
-            Rule(Expr::Sequence(vec![
+            Expr::Sequence(vec![
                 Expr::Atom {
                     inner: Atom::Literal("e_".into()),
                     index: 0,
@@ -364,7 +381,7 @@ mod tests {
                     inner: Atom::Literal("bar".into()),
                     index: 2,
                 },
-            ])),
+            ]),
         );
         RuleSet::new(rules, Var("S".into()))
     }
@@ -600,6 +617,58 @@ mod tests {
                     src_pos: 0..5
                 }
             ]
+        );
+    }
+
+    #[test]
+    fn set_atom_indices() {
+        let mut expr = Expr::Choice(vec![
+            Expr::Atom {
+                inner: Atom::Var(Var("A".into())),
+                index: 0,
+            },
+            Expr::Atom {
+                inner: Atom::Var(Var("B".into())),
+                index: 0,
+            },
+            Expr::Atom {
+                inner: Atom::Var(Var("C".into())),
+                index: 0,
+            },
+            Expr::Atom {
+                inner: Atom::Var(Var("D".into())),
+                index: 0,
+            },
+            Expr::Atom {
+                inner: Atom::Var(Var("E".into())),
+                index: 0,
+            },
+        ]);
+        expr.set_atom_indices(0);
+        assert_eq!(
+            expr,
+            Expr::Choice(vec![
+                Expr::Atom {
+                    inner: Atom::Var(Var("A".into())),
+                    index: 0,
+                },
+                Expr::Atom {
+                    inner: Atom::Var(Var("B".into())),
+                    index: 1,
+                },
+                Expr::Atom {
+                    inner: Atom::Var(Var("C".into())),
+                    index: 2,
+                },
+                Expr::Atom {
+                    inner: Atom::Var(Var("D".into())),
+                    index: 3,
+                },
+                Expr::Atom {
+                    inner: Atom::Var(Var("E".into())),
+                    index: 4,
+                },
+            ])
         );
     }
 }
