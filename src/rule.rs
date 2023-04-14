@@ -29,8 +29,8 @@ impl RuleSet {
         let mut ctx = EvalContext {
             src_pos: 0,
             src,
-            rule: self,
-            rule_pos: self.start.clone(),
+            rule_set: self,
+            rule: self.start.clone(),
             matches: Default::default(),
         };
         let eval = rule.eval(&mut ctx);
@@ -38,7 +38,7 @@ impl RuleSet {
     }
 }
 
-pub struct Rule(pub Atom);
+pub struct Rule(pub Expr);
 
 impl Rule {
     pub fn eval(&self, ctx: &mut EvalContext) -> EvalResult {
@@ -47,16 +47,14 @@ impl Rule {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct Atom {
-    pub expr: Expr,
+pub struct Expr {
+    pub once: ExprOnce,
     pub repeat: RepeatRange,
-    pub predicate: Option<Predicate>,
 }
 
-impl Atom {
+impl Expr {
     pub fn eval(&self, ctx: &mut EvalContext) -> EvalResult {
         trace!("eval: {:?}", self);
-        let src_pos = ctx.src_pos;
         let mut repeat = 0;
         let mut eval = loop {
             trace!("repeat: {}", repeat);
@@ -67,7 +65,7 @@ impl Atom {
                 }
                 assert!(repeat < end);
             }
-            let eval = self.expr.eval(ctx);
+            let eval = self.once.eval(ctx);
             if eval == EvalResult::NotMatched {
                 match self.repeat.end {
                     RepeatRangeEnd::Finite(_) => {
@@ -86,20 +84,7 @@ impl Atom {
             trace!("repeat < start");
             eval = EvalResult::NotMatched;
         }
-        match &self.predicate {
-            Some(p) => {
-                trace!("predicate: {:?}", p);
-                ctx.src_pos = src_pos;
-                match p {
-                    Predicate::Lookahead => eval,
-                    Predicate::Not => match eval {
-                        EvalResult::Matched => EvalResult::NotMatched,
-                        EvalResult::NotMatched => EvalResult::Matched,
-                    },
-                }
-            }
-            None => eval,
-        }
+        eval
     }
 }
 
@@ -133,39 +118,43 @@ pub enum Predicate {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub enum Expr {
+pub enum ExprOnce {
     Var {
         name: Var,
         index: usize,
     },
-    Choice(Vec<Atom>),
+    Choice(Vec<Expr>),
     /// Terminal
     LiteralString {
         value: String,
         index: usize,
     },
     /// Sequence delimited by parentheses
-    Sequence(Vec<Atom>),
+    Sequence(Vec<Expr>),
+    Predicate {
+        predicate: Predicate,
+        inner: Box<Expr>,
+    },
 }
 
-impl Expr {
+impl ExprOnce {
     pub fn eval(&self, ctx: &mut EvalContext) -> EvalResult {
         match self {
-            Expr::Var { name, index } => {
+            ExprOnce::Var { name, index } => {
                 let src_pos = ctx.src_pos;
-                let rule = ctx.rule.rule(name).unwrap();
-                let rule_pos = ctx.rule_pos.clone();
-                ctx.rule_pos = name.clone();
+                let rule = ctx.rule_set.rule(name).unwrap();
+                let rule_pos = ctx.rule.clone();
+                ctx.rule = name.clone();
                 let eval = rule.eval(ctx);
 
                 // Restore the rule position
-                ctx.rule_pos = rule_pos;
+                ctx.rule = rule_pos;
 
                 if eval == EvalResult::Matched {
                     // Save the match
                     ctx.matches.push(Match {
                         rule_pos: RulePosition {
-                            var: ctx.rule_pos.clone(),
+                            var: ctx.rule.clone(),
                             index: *index,
                         },
                         src_pos: src_pos..ctx.src_pos,
@@ -174,10 +163,10 @@ impl Expr {
 
                 eval
             }
-            Expr::Choice(choice) => {
+            ExprOnce::Choice(choice) => {
                 let src_pos = ctx.src_pos;
-                for atom in choice {
-                    let eval = atom.eval(ctx);
+                for expr in choice {
+                    let eval = expr.eval(ctx);
                     if eval == EvalResult::Matched {
                         return EvalResult::Matched;
                     }
@@ -185,7 +174,7 @@ impl Expr {
                 }
                 EvalResult::NotMatched
             }
-            Expr::LiteralString { value, index } => {
+            ExprOnce::LiteralString { value, index } => {
                 if ctx.src[ctx.src_pos..].starts_with(value.chars().collect::<Vec<_>>().as_slice())
                 {
                     let end = ctx.src_pos + value.len();
@@ -193,7 +182,7 @@ impl Expr {
                     // Save the match
                     ctx.matches.push(Match {
                         rule_pos: RulePosition {
-                            var: ctx.rule_pos.clone(),
+                            var: ctx.rule.clone(),
                             index: *index,
                         },
                         src_pos: ctx.src_pos..end,
@@ -207,14 +196,26 @@ impl Expr {
                     EvalResult::NotMatched
                 }
             }
-            Expr::Sequence(sequence) => {
-                for atom in sequence {
-                    let eval = atom.eval(ctx);
+            ExprOnce::Sequence(sequence) => {
+                for expr in sequence {
+                    let eval = expr.eval(ctx);
                     if eval == EvalResult::NotMatched {
                         return EvalResult::NotMatched;
                     }
                 }
                 EvalResult::Matched
+            }
+            ExprOnce::Predicate { predicate, inner } => {
+                let src_pos = ctx.src_pos;
+                let eval = inner.eval(ctx);
+                ctx.src_pos = src_pos;
+                match predicate {
+                    Predicate::Lookahead => eval,
+                    Predicate::Not => match eval {
+                        EvalResult::Matched => EvalResult::NotMatched,
+                        EvalResult::NotMatched => EvalResult::Matched,
+                    },
+                }
             }
         }
     }
@@ -229,9 +230,9 @@ pub enum EvalResult {
 pub struct EvalContext<'src, 'rule> {
     pub src: &'src [char],
     pub src_pos: usize,
-    pub rule: &'rule RuleSet,
+    pub rule_set: &'rule RuleSet,
 
-    pub rule_pos: Var,
+    pub rule: Var,
     pub matches: Vec<Match>,
 }
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
@@ -249,141 +250,175 @@ pub struct Match {
 mod tests {
     use super::*;
 
-    /// S <- A / B / C / D
+    /// S <- A / B / C / D / E
     /// A <- "a"
     /// B <- "b"
-    /// C <- "em" empty "pty"
-    /// D <- "d" "repeat"+
+    /// C <- "c_" "em" empty "pty"
+    /// D <- "d" "_repeat"+
+    /// E <- "e_" !"foobar" "bar"
     fn rule() -> RuleSet {
         let mut rules = HashMap::new();
         rules.insert(
             Var("S".into()),
-            Rule(Atom {
-                expr: Expr::Sequence(vec![Atom {
-                    expr: Expr::Choice(vec![
-                        Atom {
-                            expr: Expr::Var {
+            Rule(Expr {
+                once: ExprOnce::Sequence(vec![Expr {
+                    once: ExprOnce::Choice(vec![
+                        Expr {
+                            once: ExprOnce::Var {
                                 name: Var("A".into()),
                                 index: 0,
                             },
                             repeat: RepeatRange::new(1, RepeatRangeEnd::Finite(1)),
-                            predicate: None,
                         },
-                        Atom {
-                            expr: Expr::Var {
+                        Expr {
+                            once: ExprOnce::Var {
                                 name: Var("B".into()),
                                 index: 1,
                             },
                             repeat: RepeatRange::new(1, RepeatRangeEnd::Finite(1)),
-                            predicate: None,
                         },
-                        Atom {
-                            expr: Expr::Var {
+                        Expr {
+                            once: ExprOnce::Var {
                                 name: Var("C".into()),
                                 index: 2,
                             },
                             repeat: RepeatRange::new(1, RepeatRangeEnd::Finite(1)),
-                            predicate: None,
                         },
-                        Atom {
-                            expr: Expr::Var {
+                        Expr {
+                            once: ExprOnce::Var {
                                 name: Var("D".into()),
                                 index: 3,
                             },
                             repeat: RepeatRange::new(1, RepeatRangeEnd::Finite(1)),
-                            predicate: None,
+                        },
+                        Expr {
+                            once: ExprOnce::Var {
+                                name: Var("E".into()),
+                                index: 4,
+                            },
+                            repeat: RepeatRange::new(1, RepeatRangeEnd::Finite(1)),
                         },
                     ]),
                     repeat: RepeatRange::new(1, RepeatRangeEnd::Finite(1)),
-                    predicate: None,
                 }]),
                 repeat: RepeatRange::new(1, RepeatRangeEnd::Finite(1)),
-                predicate: None,
             }),
         );
         rules.insert(
             Var("A".into()),
-            Rule(Atom {
-                expr: Expr::Sequence(vec![Atom {
-                    expr: Expr::LiteralString {
+            Rule(Expr {
+                once: ExprOnce::Sequence(vec![Expr {
+                    once: ExprOnce::LiteralString {
                         value: "a".into(),
                         index: 0,
                     },
                     repeat: RepeatRange::new(1, RepeatRangeEnd::Finite(1)),
-                    predicate: None,
                 }]),
                 repeat: RepeatRange::new(1, RepeatRangeEnd::Finite(1)),
-                predicate: None,
             }),
         );
         rules.insert(
             Var("B".into()),
-            Rule(Atom {
-                expr: Expr::Sequence(vec![Atom {
-                    expr: Expr::LiteralString {
+            Rule(Expr {
+                once: ExprOnce::Sequence(vec![Expr {
+                    once: ExprOnce::LiteralString {
                         value: "b".into(),
                         index: 0,
                     },
                     repeat: RepeatRange::new(1, RepeatRangeEnd::Finite(1)),
-                    predicate: None,
                 }]),
                 repeat: RepeatRange::new(1, RepeatRangeEnd::Finite(1)),
-                predicate: None,
             }),
         );
         rules.insert(
             Var("C".into()),
-            Rule(Atom {
-                expr: Expr::Sequence(vec![
-                    Atom {
-                        expr: Expr::LiteralString {
-                            value: "em".into(),
+            Rule(Expr {
+                once: ExprOnce::Sequence(vec![
+                    Expr {
+                        once: ExprOnce::LiteralString {
+                            value: "c_".into(),
                             index: 0,
                         },
                         repeat: RepeatRange::new(1, RepeatRangeEnd::Finite(1)),
-                        predicate: None,
                     },
-                    Atom {
-                        expr: Expr::Sequence(vec![]),
-                        repeat: RepeatRange::new(1, RepeatRangeEnd::Finite(1)),
-                        predicate: None,
-                    },
-                    Atom {
-                        expr: Expr::LiteralString {
-                            value: "pty".into(),
+                    Expr {
+                        once: ExprOnce::LiteralString {
+                            value: "em".into(),
                             index: 1,
                         },
                         repeat: RepeatRange::new(1, RepeatRangeEnd::Finite(1)),
-                        predicate: None,
+                    },
+                    Expr {
+                        once: ExprOnce::Sequence(vec![]),
+                        repeat: RepeatRange::new(1, RepeatRangeEnd::Finite(1)),
+                    },
+                    Expr {
+                        once: ExprOnce::LiteralString {
+                            value: "pty".into(),
+                            index: 2,
+                        },
+                        repeat: RepeatRange::new(1, RepeatRangeEnd::Finite(1)),
                     },
                 ]),
                 repeat: RepeatRange::new(1, RepeatRangeEnd::Finite(1)),
-                predicate: None,
             }),
         );
         rules.insert(
             Var("D".into()),
-            Rule(Atom {
-                expr: Expr::Sequence(vec![
-                    Atom {
-                        expr: Expr::LiteralString {
+            Rule(Expr {
+                once: ExprOnce::Sequence(vec![
+                    Expr {
+                        once: ExprOnce::LiteralString {
                             value: "d".into(),
                             index: 0,
                         },
                         repeat: RepeatRange::new(1, RepeatRangeEnd::Finite(1)),
-                        predicate: None,
                     },
-                    Atom {
-                        expr: Expr::LiteralString {
+                    Expr {
+                        once: ExprOnce::LiteralString {
                             value: "_repeat".into(),
                             index: 1,
                         },
                         repeat: RepeatRange::new(1, RepeatRangeEnd::Infinite),
-                        predicate: None,
                     },
                 ]),
                 repeat: RepeatRange::new(1, RepeatRangeEnd::Finite(1)),
-                predicate: None,
+            }),
+        );
+        rules.insert(
+            Var("E".into()),
+            Rule(Expr {
+                once: ExprOnce::Sequence(vec![
+                    Expr {
+                        once: ExprOnce::LiteralString {
+                            value: "e_".into(),
+                            index: 0,
+                        },
+                        repeat: RepeatRange::new(1, RepeatRangeEnd::Finite(1)),
+                    },
+                    Expr {
+                        once: ExprOnce::Predicate {
+                            inner: Expr {
+                                once: ExprOnce::LiteralString {
+                                    value: "foobar".into(),
+                                    index: 1,
+                                },
+                                repeat: RepeatRange::new(1, RepeatRangeEnd::Finite(1)),
+                            }
+                            .into(),
+                            predicate: Predicate::Not,
+                        },
+                        repeat: RepeatRange::new(1, RepeatRangeEnd::Finite(1)),
+                    },
+                    Expr {
+                        once: ExprOnce::LiteralString {
+                            value: "bar".into(),
+                            index: 2,
+                        },
+                        repeat: RepeatRange::new(1, RepeatRangeEnd::Finite(1)),
+                    },
+                ]),
+                repeat: RepeatRange::new(1, RepeatRangeEnd::Finite(1)),
             }),
         );
         RuleSet::new(rules, Var("S".into()))
@@ -450,7 +485,7 @@ mod tests {
     #[test]
     fn empty() {
         let rule = rule();
-        let src = "empty".to_string();
+        let src = "c_empty".to_string();
         let src = src.chars().collect::<Vec<_>>();
         let (src_read, eval, matches) = rule.eval(&src);
         assert_eq!(src_read, src.len());
@@ -470,14 +505,21 @@ mod tests {
                         var: Var("C".into()),
                         index: 1,
                     },
-                    src_pos: 2..5,
+                    src_pos: 2..4,
+                },
+                Match {
+                    rule_pos: RulePosition {
+                        var: Var("C".into()),
+                        index: 2,
+                    },
+                    src_pos: 4..7,
                 },
                 Match {
                     rule_pos: RulePosition {
                         var: Var("S".into()),
                         index: 2
                     },
-                    src_pos: 0..5
+                    src_pos: 0..7
                 }
             ]
         );
@@ -568,6 +610,42 @@ mod tests {
                         index: 3
                     },
                     src_pos: 0..15
+                }
+            ]
+        );
+    }
+
+    #[test]
+    fn not() {
+        let rule = rule();
+        let src = "e_bar".to_string();
+        let src = src.chars().collect::<Vec<_>>();
+        let (src_read, eval, matches) = rule.eval(&src);
+        assert_eq!(src_read, src.len());
+        assert_eq!(eval, EvalResult::Matched);
+        assert_eq!(
+            matches,
+            vec![
+                Match {
+                    rule_pos: RulePosition {
+                        var: Var("E".into()),
+                        index: 0,
+                    },
+                    src_pos: 0..2,
+                },
+                Match {
+                    rule_pos: RulePosition {
+                        var: Var("E".into()),
+                        index: 2,
+                    },
+                    src_pos: 2..5,
+                },
+                Match {
+                    rule_pos: RulePosition {
+                        var: Var("S".into()),
+                        index: 4
+                    },
+                    src_pos: 0..5
                 }
             ]
         );
