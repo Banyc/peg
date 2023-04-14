@@ -47,48 +47,6 @@ impl Rule {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct Expr {
-    pub once: ExprOnce,
-    pub repeat: RepeatRange,
-}
-
-impl Expr {
-    pub fn eval(&self, ctx: &mut EvalContext) -> EvalResult {
-        trace!("eval: {:?}", self);
-        let mut repeat = 0;
-        let mut eval = loop {
-            trace!("repeat: {}", repeat);
-            if let RepeatRangeEnd::Finite(end) = self.repeat.end {
-                if repeat == end {
-                    trace!("repeat == end");
-                    break EvalResult::Matched;
-                }
-                assert!(repeat < end);
-            }
-            let eval = self.once.eval(ctx);
-            if eval == EvalResult::NotMatched {
-                match self.repeat.end {
-                    RepeatRangeEnd::Finite(_) => {
-                        trace!("not matched before finite");
-                        break EvalResult::NotMatched;
-                    }
-                    RepeatRangeEnd::Infinite => {
-                        trace!("repeat ends before infinite");
-                        break EvalResult::Matched;
-                    }
-                }
-            }
-            repeat += 1;
-        };
-        if repeat < self.repeat.start {
-            trace!("repeat < start");
-            eval = EvalResult::NotMatched;
-        }
-        eval
-    }
-}
-
-#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct RepeatRange {
     start: usize,
     end: RepeatRangeEnd,
@@ -118,7 +76,7 @@ pub enum Predicate {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub enum ExprOnce {
+pub enum Expr {
     Choice(Vec<Expr>),
     Atom {
         index: usize,
@@ -129,12 +87,16 @@ pub enum ExprOnce {
         predicate: Predicate,
         inner: Box<Expr>,
     },
+    Repeat {
+        range: RepeatRange,
+        inner: Box<Expr>,
+    },
 }
 
-impl ExprOnce {
+impl Expr {
     pub fn eval(&self, ctx: &mut EvalContext) -> EvalResult {
         match self {
-            ExprOnce::Atom { index, inner } => {
+            Expr::Atom { index, inner } => {
                 let src_pos = ctx.src_pos;
                 let eval = inner.eval(ctx);
 
@@ -151,7 +113,7 @@ impl ExprOnce {
 
                 eval
             }
-            ExprOnce::Choice(choice) => {
+            Expr::Choice(choice) => {
                 let src_pos = ctx.src_pos;
                 for expr in choice {
                     let eval = expr.eval(ctx);
@@ -162,7 +124,7 @@ impl ExprOnce {
                 }
                 EvalResult::NotMatched
             }
-            ExprOnce::Sequence(sequence) => {
+            Expr::Sequence(sequence) => {
                 for expr in sequence {
                     let eval = expr.eval(ctx);
                     if eval == EvalResult::NotMatched {
@@ -171,7 +133,7 @@ impl ExprOnce {
                 }
                 EvalResult::Matched
             }
-            ExprOnce::Predicate { predicate, inner } => {
+            Expr::Predicate { predicate, inner } => {
                 let src_pos = ctx.src_pos;
                 let eval = inner.eval(ctx);
                 ctx.src_pos = src_pos;
@@ -182,6 +144,39 @@ impl ExprOnce {
                         EvalResult::NotMatched => EvalResult::Matched,
                     },
                 }
+            }
+            Expr::Repeat { range, inner } => {
+                trace!("eval: {:?}", self);
+                let mut repeat = 0;
+                let mut eval = loop {
+                    trace!("repeat: {}", repeat);
+                    if let RepeatRangeEnd::Finite(end) = range.end {
+                        if repeat == end {
+                            trace!("repeat == end");
+                            break EvalResult::Matched;
+                        }
+                        assert!(repeat < end);
+                    }
+                    let eval = inner.eval(ctx);
+                    if eval == EvalResult::NotMatched {
+                        match range.end {
+                            RepeatRangeEnd::Finite(_) => {
+                                trace!("not matched before finite");
+                                break EvalResult::NotMatched;
+                            }
+                            RepeatRangeEnd::Infinite => {
+                                trace!("repeat ends before infinite");
+                                break EvalResult::Matched;
+                            }
+                        }
+                    }
+                    repeat += 1;
+                };
+                if repeat < range.start {
+                    trace!("repeat < start");
+                    eval = EvalResult::NotMatched;
+                }
+                eval
             }
         }
     }
@@ -267,184 +262,116 @@ mod tests {
         let mut rules = HashMap::new();
         rules.insert(
             Var("S".into()),
-            Rule(Expr {
-                once: ExprOnce::Sequence(vec![Expr {
-                    once: ExprOnce::Choice(vec![
-                        Expr {
-                            once: ExprOnce::Atom {
-                                inner: Atom::Var {
-                                    name: Var("A".into()),
-                                },
-                                index: 0,
-                            },
-                            repeat: RepeatRange::new(1, RepeatRangeEnd::Finite(1)),
-                        },
-                        Expr {
-                            once: ExprOnce::Atom {
-                                inner: Atom::Var {
-                                    name: Var("B".into()),
-                                },
-                                index: 1,
-                            },
-                            repeat: RepeatRange::new(1, RepeatRangeEnd::Finite(1)),
-                        },
-                        Expr {
-                            once: ExprOnce::Atom {
-                                inner: Atom::Var {
-                                    name: Var("C".into()),
-                                },
-                                index: 2,
-                            },
-                            repeat: RepeatRange::new(1, RepeatRangeEnd::Finite(1)),
-                        },
-                        Expr {
-                            once: ExprOnce::Atom {
-                                inner: Atom::Var {
-                                    name: Var("D".into()),
-                                },
-                                index: 3,
-                            },
-                            repeat: RepeatRange::new(1, RepeatRangeEnd::Finite(1)),
-                        },
-                        Expr {
-                            once: ExprOnce::Atom {
-                                inner: Atom::Var {
-                                    name: Var("E".into()),
-                                },
-                                index: 4,
-                            },
-                            repeat: RepeatRange::new(1, RepeatRangeEnd::Finite(1)),
-                        },
-                    ]),
-                    repeat: RepeatRange::new(1, RepeatRangeEnd::Finite(1)),
-                }]),
-                repeat: RepeatRange::new(1, RepeatRangeEnd::Finite(1)),
-            }),
+            Rule(Expr::Sequence(vec![Expr::Choice(vec![
+                Expr::Atom {
+                    inner: Atom::Var {
+                        name: Var("A".into()),
+                    },
+                    index: 0,
+                },
+                Expr::Atom {
+                    inner: Atom::Var {
+                        name: Var("B".into()),
+                    },
+                    index: 1,
+                },
+                Expr::Atom {
+                    inner: Atom::Var {
+                        name: Var("C".into()),
+                    },
+                    index: 2,
+                },
+                Expr::Atom {
+                    inner: Atom::Var {
+                        name: Var("D".into()),
+                    },
+                    index: 3,
+                },
+                Expr::Atom {
+                    inner: Atom::Var {
+                        name: Var("E".into()),
+                    },
+                    index: 4,
+                },
+            ])])),
         );
         rules.insert(
             Var("A".into()),
-            Rule(Expr {
-                once: ExprOnce::Sequence(vec![Expr {
-                    once: ExprOnce::Atom {
-                        inner: Atom::Literal { value: "a".into() },
-                        index: 0,
-                    },
-                    repeat: RepeatRange::new(1, RepeatRangeEnd::Finite(1)),
-                }]),
-                repeat: RepeatRange::new(1, RepeatRangeEnd::Finite(1)),
-            }),
+            Rule(Expr::Sequence(vec![Expr::Atom {
+                inner: Atom::Literal { value: "a".into() },
+                index: 0,
+            }])),
         );
         rules.insert(
             Var("B".into()),
-            Rule(Expr {
-                once: ExprOnce::Sequence(vec![Expr {
-                    once: ExprOnce::Atom {
-                        inner: Atom::Literal { value: "b".into() },
-                        index: 0,
-                    },
-                    repeat: RepeatRange::new(1, RepeatRangeEnd::Finite(1)),
-                }]),
-                repeat: RepeatRange::new(1, RepeatRangeEnd::Finite(1)),
-            }),
+            Rule(Expr::Sequence(vec![Expr::Atom {
+                inner: Atom::Literal { value: "b".into() },
+                index: 0,
+            }])),
         );
         rules.insert(
             Var("C".into()),
-            Rule(Expr {
-                once: ExprOnce::Sequence(vec![
-                    Expr {
-                        once: ExprOnce::Atom {
-                            inner: Atom::Literal { value: "c_".into() },
-                            index: 0,
-                        },
-                        repeat: RepeatRange::new(1, RepeatRangeEnd::Finite(1)),
+            Rule(Expr::Sequence(vec![
+                Expr::Atom {
+                    inner: Atom::Literal { value: "c_".into() },
+                    index: 0,
+                },
+                Expr::Atom {
+                    inner: Atom::Literal { value: "em".into() },
+                    index: 1,
+                },
+                Expr::Sequence(vec![]),
+                Expr::Atom {
+                    inner: Atom::Literal {
+                        value: "pty".into(),
                     },
-                    Expr {
-                        once: ExprOnce::Atom {
-                            inner: Atom::Literal { value: "em".into() },
-                            index: 1,
-                        },
-                        repeat: RepeatRange::new(1, RepeatRangeEnd::Finite(1)),
-                    },
-                    Expr {
-                        once: ExprOnce::Sequence(vec![]),
-                        repeat: RepeatRange::new(1, RepeatRangeEnd::Finite(1)),
-                    },
-                    Expr {
-                        once: ExprOnce::Atom {
-                            inner: Atom::Literal {
-                                value: "pty".into(),
-                            },
-                            index: 2,
-                        },
-                        repeat: RepeatRange::new(1, RepeatRangeEnd::Finite(1)),
-                    },
-                ]),
-                repeat: RepeatRange::new(1, RepeatRangeEnd::Finite(1)),
-            }),
+                    index: 2,
+                },
+            ])),
         );
         rules.insert(
             Var("D".into()),
-            Rule(Expr {
-                once: ExprOnce::Sequence(vec![
-                    Expr {
-                        once: ExprOnce::Atom {
-                            inner: Atom::Literal { value: "d".into() },
-                            index: 0,
+            Rule(Expr::Sequence(vec![
+                Expr::Atom {
+                    inner: Atom::Literal { value: "d".into() },
+                    index: 0,
+                },
+                Expr::Repeat {
+                    inner: Expr::Atom {
+                        inner: Atom::Literal {
+                            value: "_repeat".into(),
                         },
-                        repeat: RepeatRange::new(1, RepeatRangeEnd::Finite(1)),
-                    },
-                    Expr {
-                        once: ExprOnce::Atom {
-                            inner: Atom::Literal {
-                                value: "_repeat".into(),
-                            },
-                            index: 1,
-                        },
-                        repeat: RepeatRange::new(1, RepeatRangeEnd::Infinite),
-                    },
-                ]),
-                repeat: RepeatRange::new(1, RepeatRangeEnd::Finite(1)),
-            }),
+                        index: 1,
+                    }
+                    .into(),
+                    range: RepeatRange::new(1, RepeatRangeEnd::Infinite),
+                },
+            ])),
         );
         rules.insert(
             Var("E".into()),
-            Rule(Expr {
-                once: ExprOnce::Sequence(vec![
-                    Expr {
-                        once: ExprOnce::Atom {
-                            inner: Atom::Literal { value: "e_".into() },
-                            index: 0,
+            Rule(Expr::Sequence(vec![
+                Expr::Atom {
+                    inner: Atom::Literal { value: "e_".into() },
+                    index: 0,
+                },
+                Expr::Predicate {
+                    inner: Expr::Atom {
+                        inner: Atom::Literal {
+                            value: "foobar".into(),
                         },
-                        repeat: RepeatRange::new(1, RepeatRangeEnd::Finite(1)),
+                        index: 1,
+                    }
+                    .into(),
+                    predicate: Predicate::Not,
+                },
+                Expr::Atom {
+                    inner: Atom::Literal {
+                        value: "bar".into(),
                     },
-                    Expr {
-                        once: ExprOnce::Predicate {
-                            inner: Expr {
-                                once: ExprOnce::Atom {
-                                    inner: Atom::Literal {
-                                        value: "foobar".into(),
-                                    },
-                                    index: 1,
-                                },
-                                repeat: RepeatRange::new(1, RepeatRangeEnd::Finite(1)),
-                            }
-                            .into(),
-                            predicate: Predicate::Not,
-                        },
-                        repeat: RepeatRange::new(1, RepeatRangeEnd::Finite(1)),
-                    },
-                    Expr {
-                        once: ExprOnce::Atom {
-                            inner: Atom::Literal {
-                                value: "bar".into(),
-                            },
-                            index: 2,
-                        },
-                        repeat: RepeatRange::new(1, RepeatRangeEnd::Finite(1)),
-                    },
-                ]),
-                repeat: RepeatRange::new(1, RepeatRangeEnd::Finite(1)),
-            }),
+                    index: 2,
+                },
+            ])),
         );
         RuleSet::new(rules, Var("S".into()))
     }
