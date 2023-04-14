@@ -24,7 +24,7 @@ impl RuleSet {
         &self.start
     }
 
-    pub fn eval(&self, src: &[char]) -> (usize, EvalResult, Vec<Match>) {
+    pub fn eval(&self, src: &[char]) -> (usize, EvalResult, Vec<AtomMatch>) {
         let rule = self.expr(&self.start).unwrap();
         let mut ctx = EvalContext {
             src_pos: 0,
@@ -94,7 +94,7 @@ impl Expr {
 
                 if eval == EvalResult::Matched {
                     // Save the match
-                    ctx.matches.push(Match {
+                    ctx.matches.push(AtomMatch {
                         rule_pos: RulePosition {
                             var: ctx.rule.clone(),
                             index: *index,
@@ -257,7 +257,7 @@ pub struct EvalContext<'src, 'rule> {
     pub rule_set: &'rule RuleSet,
 
     pub rule: Var,
-    pub matches: Vec<Match>,
+    pub matches: Vec<AtomMatch>,
 }
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct RulePosition {
@@ -265,7 +265,7 @@ pub struct RulePosition {
     pub index: usize,
 }
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
-pub struct Match {
+pub struct AtomMatch {
     pub rule_pos: RulePosition,
     pub src_pos: std::ops::Range<usize>,
 }
@@ -397,21 +397,21 @@ mod tests {
         assert_eq!(
             matches,
             vec![
-                Match {
+                AtomMatch {
                     rule_pos: RulePosition {
                         var: Var("A".into()),
                         index: 0,
                     },
                     src_pos: 0..1,
                 },
-                Match {
+                AtomMatch {
                     rule_pos: RulePosition {
                         var: Var("A".into()),
                         index: 1,
                     },
                     src_pos: 1..1,
                 },
-                Match {
+                AtomMatch {
                     rule_pos: RulePosition {
                         var: Var("S".into()),
                         index: 0
@@ -433,14 +433,14 @@ mod tests {
         assert_eq!(
             matches,
             vec![
-                Match {
+                AtomMatch {
                     rule_pos: RulePosition {
                         var: Var("B".into()),
                         index: 0,
                     },
                     src_pos: 0..1,
                 },
-                Match {
+                AtomMatch {
                     rule_pos: RulePosition {
                         var: Var("S".into()),
                         index: 1
@@ -462,28 +462,28 @@ mod tests {
         assert_eq!(
             matches,
             vec![
-                Match {
+                AtomMatch {
                     rule_pos: RulePosition {
                         var: Var("C".into()),
                         index: 0,
                     },
                     src_pos: 0..2,
                 },
-                Match {
+                AtomMatch {
                     rule_pos: RulePosition {
                         var: Var("C".into()),
                         index: 1,
                     },
                     src_pos: 2..4,
                 },
-                Match {
+                AtomMatch {
                     rule_pos: RulePosition {
                         var: Var("C".into()),
                         index: 2,
                     },
                     src_pos: 4..7,
                 },
-                Match {
+                AtomMatch {
                     rule_pos: RulePosition {
                         var: Var("S".into()),
                         index: 2
@@ -516,21 +516,21 @@ mod tests {
         assert_eq!(
             matches,
             vec![
-                Match {
+                AtomMatch {
                     rule_pos: RulePosition {
                         var: Var("D".into()),
                         index: 0,
                     },
                     src_pos: 0..1,
                 },
-                Match {
+                AtomMatch {
                     rule_pos: RulePosition {
                         var: Var("D".into()),
                         index: 1,
                     },
                     src_pos: 1..8,
                 },
-                Match {
+                AtomMatch {
                     rule_pos: RulePosition {
                         var: Var("S".into()),
                         index: 3
@@ -552,28 +552,28 @@ mod tests {
         assert_eq!(
             matches,
             vec![
-                Match {
+                AtomMatch {
                     rule_pos: RulePosition {
                         var: Var("D".into()),
                         index: 0,
                     },
                     src_pos: 0..1,
                 },
-                Match {
+                AtomMatch {
                     rule_pos: RulePosition {
                         var: Var("D".into()),
                         index: 1,
                     },
                     src_pos: 1..8,
                 },
-                Match {
+                AtomMatch {
                     rule_pos: RulePosition {
                         var: Var("D".into()),
                         index: 1,
                     },
                     src_pos: 8..15,
                 },
-                Match {
+                AtomMatch {
                     rule_pos: RulePosition {
                         var: Var("S".into()),
                         index: 3
@@ -595,21 +595,21 @@ mod tests {
         assert_eq!(
             matches,
             vec![
-                Match {
+                AtomMatch {
                     rule_pos: RulePosition {
                         var: Var("E".into()),
                         index: 0,
                     },
                     src_pos: 0..2,
                 },
-                Match {
+                AtomMatch {
                     rule_pos: RulePosition {
                         var: Var("E".into()),
                         index: 2,
                     },
                     src_pos: 2..5,
                 },
-                Match {
+                AtomMatch {
                     rule_pos: RulePosition {
                         var: Var("S".into()),
                         index: 4
