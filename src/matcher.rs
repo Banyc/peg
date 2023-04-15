@@ -39,6 +39,9 @@ impl Matcher {
             let (read, eval, atom_matches) = self.rule.eval(&src[pos..]);
             match eval {
                 EvalResult::Matched => {
+                    if read == 0 {
+                        break;
+                    }
                     if filter.full() {
                         global_full_matches.push(pos..pos + read);
                     }
