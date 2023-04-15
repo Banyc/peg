@@ -13,8 +13,8 @@ struct Args {
     /// Matching pattern
     pattern: String,
 
-    /// Input file
-    filename: Option<String>,
+    /// Input files
+    filenames: Option<Vec<String>>,
 }
 
 fn main() {
@@ -33,21 +33,26 @@ fn main() {
     let filter = Filter::new(true);
     let matcher = Matcher::new_top(&grammars, &top_level_expr).unwrap();
 
-    match args.filename {
-        Some(filename) => {
-            let file = std::fs::File::open(filename).unwrap();
-            let mut file = std::io::BufReader::new(file);
-            print_lines_if_match(&mut file, &matcher, &filter);
+    match args.filenames {
+        Some(filenames) => {
+            assert!(!filenames.is_empty(), "No filenames given");
+            let show_filename = filenames.len() > 1;
+            for filename in filenames {
+                let file = std::fs::File::open(filename.clone()).unwrap();
+                let mut file = std::io::BufReader::new(file);
+                let line_prefix = if show_filename { &filename } else { "" };
+                print_lines_if_match(&mut file, &matcher, &filter, line_prefix);
+            }
         }
         None => {
             let stdin = std::io::stdin();
             let mut stdin = stdin.lock();
-            print_lines_if_match(&mut stdin, &matcher, &filter);
+            print_lines_if_match(&mut stdin, &matcher, &filter, "");
         }
     };
 }
 
-fn print_lines_if_match<R>(read_buf: &mut R, matcher: &Matcher, filter: &Filter)
+fn print_lines_if_match<R>(read_buf: &mut R, matcher: &Matcher, filter: &Filter, line_prefix: &str)
 where
     R: BufRead,
 {
@@ -57,15 +62,15 @@ where
         if line.is_empty() {
             break;
         }
-        print_line_if_match(&line, matcher, filter);
+        print_line_if_match(&line, matcher, filter, line_prefix);
         line.clear();
     }
 }
 
-fn print_line_if_match(line: &str, matcher: &Matcher, filter: &Filter) {
+fn print_line_if_match(line: &str, matcher: &Matcher, filter: &Filter, line_prefix: &str) {
     let (full_matches, _) = matcher.match_(line, filter).unwrap();
     if full_matches.is_empty() {
         return;
     }
-    print!("{}", line);
+    print!("{}:{}", line_prefix, line);
 }
