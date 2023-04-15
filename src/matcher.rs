@@ -39,9 +39,6 @@ impl Matcher {
             let (read, eval, atom_matches) = self.rule.eval(&src[pos..]);
             match eval {
                 EvalResult::Matched => {
-                    if read == 0 {
-                        break;
-                    }
                     if filter.full() {
                         global_full_matches.push(pos..pos + read);
                     }
@@ -49,7 +46,7 @@ impl Matcher {
                         .into_iter()
                         .filter(|m| filter.atoms().contains(&m.rule_pos));
                     global_atom_matches.extend(atom_matches);
-                    pos += read;
+                    pos += read.max(1);
                 }
                 EvalResult::NotMatched => {
                     pos += 1;
