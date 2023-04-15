@@ -13,13 +13,13 @@ pub struct Matcher {
 }
 
 impl Matcher {
-    pub fn new(patterns: &[&str], start: String) -> Result<Self, Error> {
+    pub fn new(patterns: &[String], start: String) -> Result<Self, Error> {
         let (rules, _) = parse(patterns)?;
         let rule = RuleSet::new(rules, Var(start));
         Ok(Self { rule })
     }
 
-    pub fn new_top(patterns: &[&str], top_level_expr: &str) -> Result<Self, Error> {
+    pub fn new_top(patterns: &[String], top_level_expr: &str) -> Result<Self, Error> {
         let (mut rules, parser) = parse(patterns)?;
         let top_expr = parser.parse_expr(top_level_expr)?;
         let start = Var("".into());
@@ -61,7 +61,7 @@ impl Matcher {
     }
 }
 
-fn parse(patterns: &[&str]) -> Result<(HashMap<Var, Expr>, PegParser), Error> {
+fn parse(patterns: &[String]) -> Result<(HashMap<Var, Expr>, PegParser), Error> {
     let parser = PegParser::new();
     let mut rules = HashMap::new();
     for pattern in patterns {
