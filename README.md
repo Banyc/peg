@@ -22,9 +22,18 @@ Two lines above this line is empty.
 And this is the last line.
 ```
 
+- `'this'`: match the literal string "this"
+
 ### Match `lines.*empty`
 
 ```text
-$ peggrep "'lines' ('empty' / .)*" demo_file
+$ peggrep "'lines' (!'empty' .)*" demo_file
 Two lines above this line is empty.
 ```
+
+- `!'empty'`: true if the current position is not followed by "empty"
+- `.`: consume one character unconditionally
+- `(!'empty' .)*`:
+  - def: match any number of characters that are not followed by "empty"
+  - when the position is at the `e` of "empty", the `(!'empty' .)*` exits
+    - after the exit, there are no more characters are required to match, so the whole pattern matches successfully
