@@ -35,7 +35,7 @@ impl Matcher {
         let src = src.chars().collect::<Vec<_>>();
 
         let mut pos = 0;
-        while pos < src.len() {
+        while pos <= src.len() {
             let (read, eval, atom_matches) = self.rule.eval(&src[pos..]);
             match eval {
                 EvalResult::Matched => {
