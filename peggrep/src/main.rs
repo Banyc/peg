@@ -63,7 +63,7 @@ where
 }
 
 fn print_line_if_match(line: &str, matcher: &Matcher, filter: &Filter) {
-    let (full_matches, _) = matcher.match_(line, filter);
+    let (full_matches, _) = matcher.match_(line, filter).unwrap();
     if full_matches.is_empty() {
         return;
     }

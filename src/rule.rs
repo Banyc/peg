@@ -1,5 +1,6 @@
 use std::collections::HashMap;
 
+use thiserror::Error;
 use tracing::trace;
 
 /// Non-terminal
@@ -24,7 +25,7 @@ impl RuleSet {
         &self.start
     }
 
-    pub fn eval(&self, src: &[char]) -> (usize, EvalResult, Vec<AtomMatch>) {
+    pub fn eval(&self, src: &[char]) -> Result<(usize, EvalResult, Vec<AtomMatch>), EvalError> {
         let rule = self.expr(&self.start).unwrap();
         let mut ctx = EvalContext {
             src_pos: 0,
@@ -33,8 +34,8 @@ impl RuleSet {
             rule: self.start.clone(),
             matches: Default::default(),
         };
-        let eval = rule.eval(&mut ctx);
-        (ctx.src_pos, eval, ctx.matches)
+        let eval = rule.eval(&mut ctx)?;
+        Ok((ctx.src_pos, eval, ctx.matches))
     }
 }
 
@@ -86,11 +87,11 @@ pub enum Expr {
 }
 
 impl Expr {
-    pub fn eval(&self, ctx: &mut EvalContext) -> EvalResult {
-        match self {
+    pub fn eval(&self, ctx: &mut EvalContext) -> Result<EvalResult, EvalError> {
+        let eval = match self {
             Expr::Atom { index, inner } => {
                 let src_pos = ctx.src_pos;
-                let eval = inner.eval(ctx);
+                let eval = inner.eval(ctx)?;
 
                 if eval == EvalResult::Matched {
                     // Save the match
@@ -108,9 +109,9 @@ impl Expr {
             Expr::Choice(choice) => {
                 let src_pos = ctx.src_pos;
                 for expr in choice {
-                    let eval = expr.eval(ctx);
+                    let eval = expr.eval(ctx)?;
                     if eval == EvalResult::Matched {
-                        return EvalResult::Matched;
+                        return Ok(EvalResult::Matched);
                     }
                     ctx.src_pos = src_pos;
                 }
@@ -118,16 +119,16 @@ impl Expr {
             }
             Expr::Sequence(sequence) => {
                 for expr in sequence {
-                    let eval = expr.eval(ctx);
+                    let eval = expr.eval(ctx)?;
                     if eval == EvalResult::NotMatched {
-                        return EvalResult::NotMatched;
+                        return Ok(EvalResult::NotMatched);
                     }
                 }
                 EvalResult::Matched
             }
             Expr::Predicate { predicate, inner } => {
                 let src_pos = ctx.src_pos;
-                let eval = inner.eval(ctx);
+                let eval = inner.eval(ctx)?;
                 ctx.src_pos = src_pos;
                 match predicate {
                     Predicate::Lookahead => eval,
@@ -149,7 +150,7 @@ impl Expr {
                         }
                         assert!(repeat < end);
                     }
-                    let eval = inner.eval(ctx);
+                    let eval = inner.eval(ctx)?;
                     if eval == EvalResult::NotMatched {
                         match range.end {
                             RepeatRangeEnd::Finite(_) => {
@@ -170,7 +171,8 @@ impl Expr {
                 }
                 eval
             }
-        }
+        };
+        Ok(eval)
     }
 
     pub fn set_atom_indices(&mut self, next: usize) -> usize {
@@ -211,13 +213,16 @@ pub enum Atom {
 }
 
 impl Atom {
-    pub fn eval(&self, ctx: &mut EvalContext) -> EvalResult {
-        match self {
+    pub fn eval(&self, ctx: &mut EvalContext) -> Result<EvalResult, EvalError> {
+        let eval = match self {
             Atom::Var(name) => {
-                let rule_set = ctx.rule_set.expr(name).unwrap();
+                let rule_set = match ctx.rule_set.expr(name) {
+                    Some(expr) => expr,
+                    None => return Err(EvalError::UndefinedRule(name.clone())),
+                };
                 let rule = ctx.rule.clone();
                 ctx.rule = name.clone();
-                let eval = rule_set.eval(ctx);
+                let eval = rule_set.eval(ctx)?;
 
                 // Restore the rule position
                 ctx.rule = rule;
@@ -253,7 +258,8 @@ impl Atom {
                     EvalResult::Matched
                 }
             }
-        }
+        };
+        Ok(eval)
     }
 }
 
@@ -261,6 +267,13 @@ impl Atom {
 pub enum EvalResult {
     Matched,
     NotMatched,
+}
+
+#[derive(Debug, Error, Clone, PartialEq, Eq)]
+pub enum EvalError {
+    /// The rule is not defined
+    #[error("undefined rule: {0:?}")]
+    UndefinedRule(Var),
 }
 
 pub struct EvalContext<'src, 'rule> {
@@ -425,7 +438,7 @@ mod tests {
         let rule = rule();
         let src = "a".to_string();
         let src = src.chars().collect::<Vec<_>>();
-        let (src_read, eval, matches) = rule.eval(&src);
+        let (src_read, eval, matches) = rule.eval(&src).unwrap();
         assert_eq!(src_read, src.len());
         assert_eq!(eval, EvalResult::Matched);
         assert_eq!(
@@ -461,7 +474,7 @@ mod tests {
         let rule = rule();
         let src = "b".to_string();
         let src = src.chars().collect::<Vec<_>>();
-        let (src_read, eval, matches) = rule.eval(&src);
+        let (src_read, eval, matches) = rule.eval(&src).unwrap();
         assert_eq!(src_read, src.len());
         assert_eq!(eval, EvalResult::Matched);
         assert_eq!(
@@ -490,7 +503,7 @@ mod tests {
         let rule = rule();
         let src = "c_empty".to_string();
         let src = src.chars().collect::<Vec<_>>();
-        let (src_read, eval, matches) = rule.eval(&src);
+        let (src_read, eval, matches) = rule.eval(&src).unwrap();
         assert_eq!(src_read, src.len());
         assert_eq!(eval, EvalResult::Matched);
         assert_eq!(
@@ -533,7 +546,7 @@ mod tests {
         let rule = rule();
         let src = "no matches".to_string();
         let src = src.chars().collect::<Vec<_>>();
-        let (src_read, eval, matches) = rule.eval(&src);
+        let (src_read, eval, matches) = rule.eval(&src).unwrap();
         assert_eq!(src_read, 0);
         assert_eq!(eval, EvalResult::NotMatched);
         assert_eq!(matches, vec![]);
@@ -544,7 +557,7 @@ mod tests {
         let rule = rule();
         let src = "d_repeat".to_string();
         let src = src.chars().collect::<Vec<_>>();
-        let (src_read, eval, matches) = rule.eval(&src);
+        let (src_read, eval, matches) = rule.eval(&src).unwrap();
         assert_eq!(src_read, src.len());
         assert_eq!(eval, EvalResult::Matched);
         assert_eq!(
@@ -580,7 +593,7 @@ mod tests {
         let rule = rule();
         let src = "d_repeat_repeat".to_string();
         let src = src.chars().collect::<Vec<_>>();
-        let (src_read, eval, matches) = rule.eval(&src);
+        let (src_read, eval, matches) = rule.eval(&src).unwrap();
         assert_eq!(src_read, src.len());
         assert_eq!(eval, EvalResult::Matched);
         assert_eq!(
@@ -623,7 +636,7 @@ mod tests {
         let rule = rule();
         let src = "e_bar".to_string();
         let src = src.chars().collect::<Vec<_>>();
-        let (src_read, eval, matches) = rule.eval(&src);
+        let (src_read, eval, matches) = rule.eval(&src).unwrap();
         assert_eq!(src_read, src.len());
         assert_eq!(eval, EvalResult::Matched);
         assert_eq!(
@@ -659,7 +672,7 @@ mod tests {
         let rule = rule();
         let src = "f_f".to_string();
         let src = src.chars().collect::<Vec<_>>();
-        let (src_read, eval, matches) = rule.eval(&src);
+        let (src_read, eval, matches) = rule.eval(&src).unwrap();
         assert_eq!(src_read, src.len());
         assert_eq!(eval, EvalResult::Matched);
         assert_eq!(

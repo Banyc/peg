@@ -5,7 +5,7 @@ use std::{
 
 use crate::{
     parser::{Error, PegParser},
-    rule::{AtomMatch, EvalResult, Expr, RulePosition, RuleSet, Var},
+    rule::{AtomMatch, EvalError, EvalResult, Expr, RulePosition, RuleSet, Var},
 };
 
 pub struct Matcher {
@@ -28,7 +28,11 @@ impl Matcher {
         Ok(Self { rule })
     }
 
-    pub fn match_(&self, src: &str, filter: &Filter) -> (Vec<Range<usize>>, Vec<AtomMatch>) {
+    pub fn match_(
+        &self,
+        src: &str,
+        filter: &Filter,
+    ) -> Result<(Vec<Range<usize>>, Vec<AtomMatch>), EvalError> {
         let mut global_full_matches = Vec::new();
         let mut global_atom_matches = Vec::new();
 
@@ -36,7 +40,7 @@ impl Matcher {
 
         let mut pos = 0;
         while pos <= src.len() {
-            let (read, eval, atom_matches) = self.rule.eval(&src[pos..]);
+            let (read, eval, atom_matches) = self.rule.eval(&src[pos..])?;
             match eval {
                 EvalResult::Matched => {
                     if filter.full() {
@@ -54,7 +58,7 @@ impl Matcher {
             }
         }
 
-        (global_full_matches, global_atom_matches)
+        Ok((global_full_matches, global_atom_matches))
     }
 }
 
@@ -109,7 +113,7 @@ mod tests {
 
         let filter = Filter::new(true);
         let matcher = Matcher::new_top(&[], top_level_expr).unwrap();
-        let (full_matches, _) = matcher.match_(src, &filter);
+        let (full_matches, _) = matcher.match_(src, &filter).unwrap();
         let expected = vec!["(1)", "(2)", "(4)"];
         let matched_str = full_matches
             .into_iter()
