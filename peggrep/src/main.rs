@@ -15,6 +15,10 @@ struct Args {
 
     /// Input files
     filenames: Option<Vec<String>>,
+
+    /// Select non-matching lines
+    #[arg(short('v'), long)]
+    invert_match: bool,
 }
 
 fn main() {
@@ -33,6 +37,11 @@ fn main() {
     let filter = Filter::new(true);
     let matcher = Matcher::new_top(&grammars, &top_level_expr).unwrap();
 
+    // Match
+    let match_args = MatchArgs {
+        invert_match: args.invert_match,
+    };
+
     match args.filenames {
         Some(filenames) => {
             assert!(!filenames.is_empty(), "No filenames given");
@@ -45,13 +54,13 @@ fn main() {
                 } else {
                     None
                 };
-                print_lines_if_match(&mut file, &matcher, &filter, line_prefix);
+                print_lines_if_match(&mut file, &matcher, &filter, line_prefix, &match_args);
             }
         }
         None => {
             let stdin = std::io::stdin();
             let mut stdin = stdin.lock();
-            print_lines_if_match(&mut stdin, &matcher, &filter, None);
+            print_lines_if_match(&mut stdin, &matcher, &filter, None, &match_args);
         }
     };
 }
@@ -61,6 +70,7 @@ fn print_lines_if_match<R>(
     matcher: &Matcher,
     filter: &Filter,
     line_prefix: Option<&str>,
+    args: &MatchArgs,
 ) where
     R: BufRead,
 {
@@ -70,14 +80,24 @@ fn print_lines_if_match<R>(
         if line.is_empty() {
             break;
         }
-        print_line_if_match(&line, matcher, filter, line_prefix);
+        print_line_if_match(&line, matcher, filter, line_prefix, args);
         line.clear();
     }
 }
 
-fn print_line_if_match(line: &str, matcher: &Matcher, filter: &Filter, line_prefix: Option<&str>) {
+struct MatchArgs {
+    invert_match: bool,
+}
+
+fn print_line_if_match(
+    line: &str,
+    matcher: &Matcher,
+    filter: &Filter,
+    line_prefix: Option<&str>,
+    args: &MatchArgs,
+) {
     let (full_matches, _) = matcher.match_(line, filter).unwrap();
-    if full_matches.is_empty() {
+    if full_matches.is_empty() != args.invert_match {
         return;
     }
     match line_prefix {
