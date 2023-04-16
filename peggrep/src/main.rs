@@ -40,20 +40,28 @@ fn main() {
             for filename in filenames {
                 let file = std::fs::File::open(filename.clone()).unwrap();
                 let mut file = std::io::BufReader::new(file);
-                let line_prefix = if show_filename { &filename } else { "" };
+                let line_prefix = if show_filename {
+                    Some(filename.as_ref())
+                } else {
+                    None
+                };
                 print_lines_if_match(&mut file, &matcher, &filter, line_prefix);
             }
         }
         None => {
             let stdin = std::io::stdin();
             let mut stdin = stdin.lock();
-            print_lines_if_match(&mut stdin, &matcher, &filter, "");
+            print_lines_if_match(&mut stdin, &matcher, &filter, None);
         }
     };
 }
 
-fn print_lines_if_match<R>(read_buf: &mut R, matcher: &Matcher, filter: &Filter, line_prefix: &str)
-where
+fn print_lines_if_match<R>(
+    read_buf: &mut R,
+    matcher: &Matcher,
+    filter: &Filter,
+    line_prefix: Option<&str>,
+) where
     R: BufRead,
 {
     let mut line = String::new();
@@ -67,10 +75,13 @@ where
     }
 }
 
-fn print_line_if_match(line: &str, matcher: &Matcher, filter: &Filter, line_prefix: &str) {
+fn print_line_if_match(line: &str, matcher: &Matcher, filter: &Filter, line_prefix: Option<&str>) {
     let (full_matches, _) = matcher.match_(line, filter).unwrap();
     if full_matches.is_empty() {
         return;
     }
-    print!("{}:{}", line_prefix, line);
+    match line_prefix {
+        Some(line_prefix) => print!("{}:{}", line_prefix, line),
+        None => print!("{}", line),
+    }
 }
