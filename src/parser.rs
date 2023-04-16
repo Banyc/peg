@@ -4,7 +4,7 @@ use chumsky::prelude::*;
 use thiserror::Error;
 use unescape::unescape;
 
-use crate::rule::{Atom, Expr, Predicate, RepeatRange, RepeatRangeEnd, Var};
+use crate::rule::{Atom, Def, Expr, Func, Predicate, RepeatRange, RepeatRangeEnd, Rules, Var};
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub enum Token {
@@ -18,6 +18,12 @@ pub enum Token {
     LParen,
     /// `)`
     RParen,
+    /// `[`
+    LBracket,
+    /// `]`
+    RBracket,
+    /// `,`
+    Comma,
     /// `/`
     Slash,
     /// `'hello'`
@@ -73,6 +79,9 @@ fn lexer() -> impl Parser<char, Vec<Token>, Error = Simple<char>> {
     let semicolon = just(';').map(|_| Token::Semicolon);
     let l_paren = just('(').map(|_| Token::LParen);
     let r_paren = just(')').map(|_| Token::RParen);
+    let l_bracket = just('[').map(|_| Token::LBracket);
+    let r_bracket = just(']').map(|_| Token::RBracket);
+    let comma = just(',').map(|_| Token::Comma);
     let slash = just('/').map(|_| Token::Slash);
 
     // String
@@ -141,10 +150,10 @@ fn lexer() -> impl Parser<char, Vec<Token>, Error = Simple<char>> {
     // pad <- (whitespace / comment)*
     let pad = choice((whitespace, comment)).repeated();
 
-    // token <- left_arrow/ colon / semicolon / l_paren / r_paren / slash / string / ident / range / dot / question / plus / asterisk / dollar / not / and
+    // token <- left_arrow/ colon / semicolon / l_paren / r_paren / l_bracket / r_bracket / comma / slash / string / ident / range / dot / question / plus / asterisk / dollar / not / and
     let token = choice((
-        left_arrow, colon, semicolon, l_paren, r_paren, slash, string, ident, range, dot, question,
-        plus, asterisk, dollar, not, and,
+        left_arrow, colon, semicolon, l_paren, r_paren, l_bracket, r_bracket, comma, slash, string,
+        ident, range, dot, question, plus, asterisk, dollar, not, and,
     ))
     .padded_by(pad.clone());
 
@@ -162,14 +171,22 @@ fn var_parser() -> impl Parser<Token, Var, Error = Simple<Token>> + Clone {
     filter(|t: &Token| matches!(t, Token::Ident(_))).map(|t: Token| Var(t.into_ident().unwrap()))
 }
 
-fn expr_parser() -> impl Parser<Token, Expr, Error = Simple<Token>> {
+fn expr_parser() -> impl Parser<Token, Expr, Error = Simple<Token>> + Clone {
     // empty <- "empty"
     let empty = just(Token::Ident("empty".to_string())).map(|_| Expr::Sequence(vec![]));
     let var = var_parser();
 
     let expr = recursive(|expr| {
-        // atom <- var / string / dollar / dot
+        // atom <- call / var / string / dollar / dot
         let atom = choice((
+            var.clone()
+                .then(
+                    expr.clone()
+                        .separated_by(just(Token::Comma))
+                        .allow_trailing()
+                        .delimited_by(just(Token::LBracket), just(Token::RBracket)),
+                )
+                .map(|(func, params): (Var, Vec<Expr>)| Atom::Call { func, params }),
             var.map(Atom::Var),
             filter(|t: &Token| matches!(t, Token::String(_)))
                 .map(|t: Token| Atom::Literal(t.into_string().unwrap())),
@@ -247,20 +264,40 @@ fn expr_parser() -> impl Parser<Token, Expr, Error = Simple<Token>> {
     expr
 }
 
-fn parser() -> impl Parser<Token, HashMap<Var, Expr>, Error = Simple<Token>> {
+fn parser() -> impl Parser<Token, Rules, Error = Simple<Token>> {
     let var = var_parser();
     let expr = expr_parser();
-    // rule <- var (left_arrow / colon) expr semicolon
+    // derive <- left_arrow / colon
+    let derive = choice((just(Token::LeftArrow), just(Token::Colon)));
+    // rule <- var derive expr semicolon
     let rule = var
-        .then_ignore(choice((just(Token::LeftArrow), just(Token::Colon))))
-        .then(expr)
+        .clone()
+        .then_ignore(derive.clone())
+        .then(expr.clone())
         .then_ignore(just(Token::Semicolon));
-    // rules <- rule* $
-    let rules = rule.repeated().then_ignore(just(Token::End)).map(|rules| {
+    // func <- var l_bracket args r_bracket derive expr semicolon
+    let func = var
+        .clone()
+        .then(
+            var.separated_by(just(Token::Comma))
+                .allow_trailing()
+                .delimited_by(just(Token::LBracket), just(Token::RBracket)),
+        )
+        .then_ignore(derive)
+        .then(expr)
+        .then_ignore(just(Token::Semicolon))
+        .map(|((func, args), body)| (func, Func { args, body }));
+    // def <- rule / func
+    let def = choice((
+        rule.map(|(name, rule)| (name, Def::Rule(rule))),
+        func.map(|(name, func)| (name, Def::Func(func))),
+    ));
+    // rules <- def* $
+    let rules = def.repeated().then_ignore(just(Token::End)).map(|rules| {
         let mut map = HashMap::new();
-        for (var, mut expr) in rules {
-            expr.set_atom_indices(0);
-            map.insert(var, expr);
+        for (var, mut def) in rules {
+            def.set_atom_indices();
+            map.insert(var, def);
         }
         map
     });
@@ -270,7 +307,7 @@ fn parser() -> impl Parser<Token, HashMap<Var, Expr>, Error = Simple<Token>> {
 
 pub struct PegParser {
     lexer: Box<dyn Parser<char, Vec<Token>, Error = Simple<char>>>,
-    parser: Box<dyn Parser<Token, HashMap<Var, Expr>, Error = Simple<Token>>>,
+    parser: Box<dyn Parser<Token, Rules, Error = Simple<Token>>>,
     expr_parser: Box<dyn Parser<Token, Expr, Error = Simple<Token>>>,
 }
 
@@ -298,7 +335,7 @@ impl PegParser {
         }
     }
 
-    pub fn parse(&self, src: &str) -> Result<HashMap<Var, Expr>, Error> {
+    pub fn parse(&self, src: &str) -> Result<Rules, Error> {
         let tokens = self.lexer.parse(src).map_err(Error::Lexer)?;
         self.parser.parse(tokens).map_err(Error::Parser)
     }
@@ -388,19 +425,21 @@ mod tests {
     #[test]
     fn rule() {
         let input = "
-        S <- A / B / C / D / E ;
+        S <- A / B / C / D / E / F ;
         A <- 'a' $ ;
         B <- 'b' ;
         C <- 'c_' 'em' empty 'pty' ;
         D <- 'd' '_repeat'+ ;
         E <- 'e_' !'foobar' 'bar' ;
+        three[char] <- char 3..3;
+        F <- 'f_' three['f'] ;
         ";
         let parser = PegParser::new();
         let rules = parser.parse(input).unwrap();
         let mut rules_expected = HashMap::new();
         rules_expected.insert(
             Var("S".into()),
-            Expr::Choice(vec![
+            Def::Rule(Expr::Choice(vec![
                 Expr::Atom {
                     inner: Atom::Var(Var("A".into())),
                     index: 0,
@@ -421,11 +460,15 @@ mod tests {
                     inner: Atom::Var(Var("E".into())),
                     index: 4,
                 },
-            ]),
+                Expr::Atom {
+                    inner: Atom::Var(Var("F".into())),
+                    index: 5,
+                },
+            ])),
         );
         rules_expected.insert(
             Var("A".into()),
-            Expr::Sequence(vec![
+            Def::Rule(Expr::Sequence(vec![
                 Expr::Atom {
                     inner: Atom::Literal("a".into()),
                     index: 0,
@@ -434,18 +477,18 @@ mod tests {
                     inner: Atom::End,
                     index: 1,
                 },
-            ]),
+            ])),
         );
         rules_expected.insert(
             Var("B".into()),
-            Expr::Atom {
+            Def::Rule(Expr::Atom {
                 inner: Atom::Literal("b".into()),
                 index: 0,
-            },
+            }),
         );
         rules_expected.insert(
             Var("C".into()),
-            Expr::Sequence(vec![
+            Def::Rule(Expr::Sequence(vec![
                 Expr::Atom {
                     inner: Atom::Literal("c_".into()),
                     index: 0,
@@ -459,11 +502,11 @@ mod tests {
                     inner: Atom::Literal("pty".into()),
                     index: 2,
                 },
-            ]),
+            ])),
         );
         rules_expected.insert(
             Var("D".into()),
-            Expr::Sequence(vec![
+            Def::Rule(Expr::Sequence(vec![
                 Expr::Atom {
                     inner: Atom::Literal("d".into()),
                     index: 0,
@@ -476,11 +519,11 @@ mod tests {
                     .into(),
                     range: RepeatRange::new(1, RepeatRangeEnd::Infinite),
                 },
-            ]),
+            ])),
         );
         rules_expected.insert(
             Var("E".into()),
-            Expr::Sequence(vec![
+            Def::Rule(Expr::Sequence(vec![
                 Expr::Atom {
                     inner: Atom::Literal("e_".into()),
                     index: 0,
@@ -497,7 +540,40 @@ mod tests {
                     inner: Atom::Literal("bar".into()),
                     index: 2,
                 },
-            ]),
+            ])),
+        );
+        rules_expected.insert(
+            Var("three".into()),
+            Def::Func(Func {
+                args: vec![Var("char".into())],
+                body: Expr::Repeat {
+                    range: RepeatRange::new(3, RepeatRangeEnd::Finite(3)),
+                    inner: Expr::Atom {
+                        index: 0,
+                        inner: Atom::Var(Var("char".into())),
+                    }
+                    .into(),
+                },
+            }),
+        );
+        rules_expected.insert(
+            Var("F".into()),
+            Def::Rule(Expr::Sequence(vec![
+                Expr::Atom {
+                    inner: Atom::Literal("f_".into()),
+                    index: 0,
+                },
+                Expr::Atom {
+                    inner: Atom::Call {
+                        func: Var("three".into()),
+                        params: vec![Expr::Atom {
+                            inner: Atom::Literal("f".into()),
+                            index: 2,
+                        }],
+                    },
+                    index: 1,
+                },
+            ])),
         );
         let var = Var("S".into());
         assert_eq!(rules.get(&var), rules_expected.get(&var));
@@ -508,6 +584,10 @@ mod tests {
         let var = Var("C".into());
         assert_eq!(rules.get(&var), rules_expected.get(&var));
         let var = Var("D".into());
+        assert_eq!(rules.get(&var), rules_expected.get(&var));
+        let var = Var("E".into());
+        assert_eq!(rules.get(&var), rules_expected.get(&var));
+        let var = Var("F".into());
         assert_eq!(rules.get(&var), rules_expected.get(&var));
         assert_eq!(rules, rules_expected);
     }

@@ -5,7 +5,7 @@ use std::{
 
 use crate::{
     parser::{Error, PegParser},
-    rule::{AtomMatch, EvalError, EvalResult, Expr, RulePosition, RuleSet, Var},
+    rule::{AtomMatch, Def, EvalError, EvalResult, RulePosition, RuleSet, Rules, Var},
 };
 
 pub struct Matcher {
@@ -23,7 +23,7 @@ impl Matcher {
         let (mut rules, parser) = parse(patterns)?;
         let top_expr = parser.parse_expr(top_level_expr)?;
         let start = Var("".into());
-        rules.insert(start.clone(), top_expr);
+        rules.insert(start.clone(), Def::Rule(top_expr));
         let rule = RuleSet::new(rules, start);
         Ok(Self { rule })
     }
@@ -62,7 +62,7 @@ impl Matcher {
     }
 }
 
-fn parse(patterns: &[String]) -> Result<(HashMap<Var, Expr>, PegParser), Error> {
+fn parse(patterns: &[String]) -> Result<(Rules, PegParser), Error> {
     let parser = PegParser::new();
     let mut rules = HashMap::new();
     for pattern in patterns {

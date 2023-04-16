@@ -1,4 +1,4 @@
-use std::collections::HashMap;
+use std::{borrow::Cow, collections::HashMap};
 
 use thiserror::Error;
 use tracing::trace;
@@ -7,17 +7,44 @@ use tracing::trace;
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct Var(pub String);
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Func {
+    pub args: Vec<Var>,
+    pub body: Expr,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Def {
+    Rule(Expr),
+    Func(Func),
+}
+
+impl Def {
+    pub fn set_atom_indices(&mut self) {
+        match self {
+            Def::Rule(rule) => {
+                rule.set_atom_indices(0);
+            }
+            Def::Func(func) => {
+                func.body.set_atom_indices(0);
+            }
+        }
+    }
+}
+
+pub type Rules = HashMap<Var, Def>;
+
 pub struct RuleSet {
-    rules: HashMap<Var, Expr>,
+    rules: Rules,
     start: Var,
 }
 
 impl RuleSet {
-    pub fn new(rules: HashMap<Var, Expr>, start: Var) -> Self {
+    pub fn new(rules: Rules, start: Var) -> Self {
         Self { rules, start }
     }
 
-    pub fn expr(&self, var: &Var) -> Option<&Expr> {
+    pub fn def(&self, var: &Var) -> Option<&Def> {
         self.rules.get(var)
     }
 
@@ -26,11 +53,18 @@ impl RuleSet {
     }
 
     pub fn eval(&self, src: &[char]) -> Result<(usize, EvalResult, Vec<AtomMatch>), EvalError> {
-        let rule = self.expr(&self.start).unwrap();
+        let rule = self.def(&self.start).unwrap();
+        let rule = match rule {
+            Def::Rule(rule) => rule,
+            Def::Func(_) => {
+                panic!("start rule must be a rule, not a function");
+            }
+        };
         let mut ctx = EvalContext {
             src_pos: 0,
             src,
-            rule_set: self,
+            rules: &self.rules,
+            params: Default::default(),
             rule: self.start.clone(),
             matches: Default::default(),
         };
@@ -177,9 +211,19 @@ impl Expr {
 
     pub fn set_atom_indices(&mut self, next: usize) -> usize {
         match self {
-            Expr::Atom { index, .. } => {
+            Expr::Atom { index, inner } => {
                 *index = next;
-                next + 1
+                let next = next + 1;
+                match inner {
+                    Atom::Call { params, .. } => {
+                        let mut next = next;
+                        for param in params {
+                            next = param.set_atom_indices(next);
+                        }
+                        next
+                    }
+                    _ => next,
+                }
             }
             Expr::Choice(choice) => {
                 let mut next = next;
@@ -210,19 +254,38 @@ pub enum Atom {
     End,
     /// `.`
     Any,
+    /// e.g.: `foo[x, y]`
+    Call {
+        func: Var,
+        params: Vec<Expr>,
+    },
 }
 
 impl Atom {
     pub fn eval(&self, ctx: &mut EvalContext) -> Result<EvalResult, EvalError> {
         let eval = match self {
             Atom::Var(name) => {
-                let rule_set = match ctx.rule_set.expr(name) {
-                    Some(expr) => expr,
-                    None => return Err(EvalError::UndefinedRule(name.clone())),
-                };
                 let rule = ctx.rule.clone();
-                ctx.rule = name.clone();
-                let eval = rule_set.eval(ctx)?;
+
+                let expr = match ctx.params.get(name) {
+                    Some((rule, expr)) => {
+                        // Set the rule position
+                        ctx.rule = rule.clone();
+
+                        Cow::Owned(expr.clone())
+                    }
+                    None => match ctx.rules.get(name) {
+                        Some(Def::Rule(expr)) => {
+                            // Set the rule position
+                            ctx.rule = name.clone();
+
+                            Cow::Borrowed(expr)
+                        }
+                        _ => return Err(EvalError::UndefinedRule(name.clone())),
+                    },
+                };
+
+                let eval = expr.eval(ctx)?;
 
                 // Restore the rule position
                 ctx.rule = rule;
@@ -258,6 +321,42 @@ impl Atom {
                     EvalResult::Matched
                 }
             }
+            Atom::Call { func, params } => {
+                let ctx_params = ctx.params.clone();
+                let name = func.clone();
+                let rule = ctx.rule.clone();
+                ctx.rule = name.clone();
+                let func = match ctx.rules.get(&name) {
+                    Some(Def::Func(func)) => func,
+                    _ => return Err(EvalError::UndefinedFunc(name.clone())),
+                };
+
+                // Check the number of arguments
+                if params.len() != func.args.len() {
+                    return Err(EvalError::UnmatchedArgs {
+                        func: name,
+                        expected: func.args.len(),
+                        actual: params.len(),
+                    });
+                }
+
+                // Put the params to the context
+                for (param, arg) in params.iter().zip(func.args.iter()) {
+                    ctx.params
+                        .insert(arg.clone(), (rule.clone(), param.clone()));
+                }
+
+                // Evaluate the function
+                let eval = func.body.eval(ctx)?;
+
+                // Restore the params
+                ctx.params = ctx_params;
+
+                // Restore the rule position
+                ctx.rule = rule;
+
+                eval
+            }
         };
         Ok(eval)
     }
@@ -274,12 +373,25 @@ pub enum EvalError {
     /// The rule is not defined
     #[error("undefined rule: {0:?}")]
     UndefinedRule(Var),
+    /// The function is not defined
+    #[error("undefined function: {0:?}")]
+    UndefinedFunc(Var),
+    /// The function is called with the wrong number of arguments
+    #[error("unmatched arguments: {func:?} expected {expected} but got {actual}")]
+    UnmatchedArgs {
+        func: Var,
+        expected: usize,
+        actual: usize,
+    },
 }
 
 pub struct EvalContext<'src, 'rule> {
     pub src: &'src [char],
     pub src_pos: usize,
-    pub rule_set: &'rule RuleSet,
+    pub rules: &'rule Rules,
+
+    /// param name -> (rule name, expr)
+    pub params: HashMap<Var, (Var, Expr)>,
 
     pub rule: Var,
     pub matches: Vec<AtomMatch>,
@@ -310,7 +422,7 @@ mod tests {
         let mut rules = HashMap::new();
         rules.insert(
             Var("S".into()),
-            Expr::Sequence(vec![Expr::Choice(vec![
+            Def::Rule(Expr::Sequence(vec![Expr::Choice(vec![
                 Expr::Atom {
                     inner: Atom::Var(Var("A".into())),
                     index: 0,
@@ -335,11 +447,11 @@ mod tests {
                     inner: Atom::Var(Var("F".into())),
                     index: 5,
                 },
-            ])]),
+            ])])),
         );
         rules.insert(
             Var("A".into()),
-            Expr::Sequence(vec![
+            Def::Rule(Expr::Sequence(vec![
                 Expr::Atom {
                     inner: Atom::Literal("a".into()),
                     index: 0,
@@ -348,18 +460,18 @@ mod tests {
                     inner: Atom::End,
                     index: 1,
                 },
-            ]),
+            ])),
         );
         rules.insert(
             Var("B".into()),
-            Expr::Sequence(vec![Expr::Atom {
+            Def::Rule(Expr::Sequence(vec![Expr::Atom {
                 inner: Atom::Literal("b".into()),
                 index: 0,
-            }]),
+            }])),
         );
         rules.insert(
             Var("C".into()),
-            Expr::Sequence(vec![
+            Def::Rule(Expr::Sequence(vec![
                 Expr::Atom {
                     inner: Atom::Literal("c_".into()),
                     index: 0,
@@ -373,11 +485,11 @@ mod tests {
                     inner: Atom::Literal("pty".into()),
                     index: 2,
                 },
-            ]),
+            ])),
         );
         rules.insert(
             Var("D".into()),
-            Expr::Sequence(vec![
+            Def::Rule(Expr::Sequence(vec![
                 Expr::Atom {
                     inner: Atom::Literal("d".into()),
                     index: 0,
@@ -390,11 +502,11 @@ mod tests {
                     .into(),
                     range: RepeatRange::new(1, RepeatRangeEnd::Infinite),
                 },
-            ]),
+            ])),
         );
         rules.insert(
             Var("E".into()),
-            Expr::Sequence(vec![
+            Def::Rule(Expr::Sequence(vec![
                 Expr::Atom {
                     inner: Atom::Literal("e_".into()),
                     index: 0,
@@ -411,11 +523,11 @@ mod tests {
                     inner: Atom::Literal("bar".into()),
                     index: 2,
                 },
-            ]),
+            ])),
         );
         rules.insert(
             Var("F".into()),
-            Expr::Sequence(vec![
+            Def::Rule(Expr::Sequence(vec![
                 Expr::Atom {
                     inner: Atom::Literal("f".into()),
                     index: 0,
@@ -428,7 +540,7 @@ mod tests {
                     inner: Atom::Any,
                     index: 2,
                 },
-            ]),
+            ])),
         );
         RuleSet::new(rules, Var("S".into()))
     }
@@ -733,6 +845,26 @@ mod tests {
                 inner: Atom::Var(Var("E".into())),
                 index: 0,
             },
+            Expr::Atom {
+                inner: Atom::Call {
+                    func: Var("F".into()),
+                    params: vec![
+                        Expr::Atom {
+                            inner: Atom::Var(Var("G".into())),
+                            index: 0,
+                        },
+                        Expr::Atom {
+                            inner: Atom::Var(Var("H".into())),
+                            index: 0,
+                        },
+                    ],
+                },
+                index: 0,
+            },
+            Expr::Atom {
+                inner: Atom::Var(Var("I".into())),
+                index: 0,
+            },
         ]);
         expr.set_atom_indices(0);
         assert_eq!(
@@ -758,7 +890,124 @@ mod tests {
                     inner: Atom::Var(Var("E".into())),
                     index: 4,
                 },
+                Expr::Atom {
+                    inner: Atom::Call {
+                        func: Var("F".into()),
+                        params: vec![
+                            Expr::Atom {
+                                inner: Atom::Var(Var("G".into())),
+                                index: 6,
+                            },
+                            Expr::Atom {
+                                inner: Atom::Var(Var("H".into())),
+                                index: 7,
+                            },
+                        ],
+                    },
+                    index: 5,
+                },
+                Expr::Atom {
+                    inner: Atom::Var(Var("I".into())),
+                    index: 8,
+                },
             ])
+        );
+    }
+
+    #[test]
+    fn call() {
+        // S           <- three['f']
+        // three[char] <- char 3..3
+        let mut rules = HashMap::new();
+        rules.insert(
+            Var("S".into()),
+            Def::Rule(Expr::Atom {
+                index: 0,
+                inner: Atom::Call {
+                    func: Var("three".into()),
+                    params: vec![Expr::Atom {
+                        index: 1,
+                        inner: Atom::Literal("f".into()),
+                    }],
+                },
+            }),
+        );
+        rules.insert(
+            Var("three".into()),
+            Def::Func(Func {
+                args: vec![Var("char".into())],
+                body: Expr::Repeat {
+                    range: RepeatRange {
+                        start: 3,
+                        end: RepeatRangeEnd::Finite(3),
+                    },
+                    inner: Expr::Atom {
+                        index: 0,
+                        inner: Atom::Var(Var("char".into())),
+                    }
+                    .into(),
+                },
+            }),
+        );
+        let rule = RuleSet::new(rules, Var("S".into()));
+        let src = "fff".to_string();
+        let src = src.chars().collect::<Vec<_>>();
+        let (src_read, eval, matches) = rule.eval(&src).unwrap();
+        assert_eq!(src_read, src.len());
+        assert_eq!(eval, EvalResult::Matched);
+        assert_eq!(
+            matches,
+            vec![
+                AtomMatch {
+                    rule_pos: RulePosition {
+                        var: Var("S".into()),
+                        index: 1,
+                    },
+                    src_pos: 0..1,
+                },
+                AtomMatch {
+                    rule_pos: RulePosition {
+                        var: Var("three".into()),
+                        index: 0,
+                    },
+                    src_pos: 0..1,
+                },
+                AtomMatch {
+                    rule_pos: RulePosition {
+                        var: Var("S".into()),
+                        index: 1,
+                    },
+                    src_pos: 1..2,
+                },
+                AtomMatch {
+                    rule_pos: RulePosition {
+                        var: Var("three".into()),
+                        index: 0,
+                    },
+                    src_pos: 1..2,
+                },
+                AtomMatch {
+                    rule_pos: RulePosition {
+                        var: Var("S".into()),
+                        index: 1,
+                    },
+                    src_pos: 2..3,
+                },
+                AtomMatch {
+                    rule_pos: RulePosition {
+                        var: Var("three".into()),
+                        index: 0,
+                    },
+                    src_pos: 2..3,
+                },
+                AtomMatch {
+                    rule_pos: RulePosition {
+                        var: Var("S".into()),
+                        index: 0
+                    },
+                    src_pos: 0..3
+                }
+            ]
         );
     }
 }
