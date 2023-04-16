@@ -14,3 +14,5 @@ _            <- space*
               ;
 ident        <- letter (letter / digit / '_')*
               ;
+until[str]   <- (!str .)* str
+              ;
