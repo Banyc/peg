@@ -31,11 +31,16 @@ $ peggrep "'this' (!'empty' .)* 'empty'" demo_file
 Two lines above this line is empty.
 ```
 
-- `!'empty'`: true if the current position is not followed by "empty"
+- `!'empty'`:
+  - def: true if the current position is not followed by "empty"
+  - `!` does not consume any characters
 - `.`: consume one character unconditionally
 - `(!'empty' .)*`:
   - def: match any number of characters that are not followed by "empty"
   - when the position is at the `e` of "empty", the `(!'empty' .)*` exits
+  - why not just `.* 'empty'`:
+    - `*` is greedy in PEG
+    - `.*` will consume "empty" without exiting, so `'empty'` has no chance to match
 - The final `'empty'`: match and consume the "empty"
 
 To make life easier, we can make `(!'empty' .)* 'empty'` into a function:
@@ -78,3 +83,25 @@ $ export PEGGREP_GRAMMAR="/absolute/path/to/grammar.peg"
 $ peggrep "'this' until['empty']" demo_file
 Two lines above this line is empty.
 ```
+
+### Match all private functions
+
+Steps:
+
+1. Write a grammar file:
+   ```py
+   // grammar.peg
+   space <- ' ' / '\t' / '\r' / '\n'
+          ;
+   _     <- space*
+          ;
+   ```
+1. Run:
+   ```bash
+   $ export PEGGREP_GRAMMAR="/absolute/path/to/grammar.peg"
+   $ peggrep -^ "_ !'pub' 'fn'" src/*.rs
+   ```
+   - `-^`: match at the start of a line
+   - `_`:
+     - predefined in the grammar file
+     - to match any number of spaces
