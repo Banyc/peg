@@ -32,6 +32,10 @@ fn main() {
 
     // Read all grammars
     let mut grammars = vec![];
+    if let Ok(env_grammar) = std::env::var("PEGGREP_GRAMMAR") {
+        let grammar = std::fs::read_to_string(env_grammar).unwrap();
+        grammars.push(grammar);
+    };
     for grammar in args.grammars {
         let grammar = std::fs::read_to_string(grammar).unwrap();
         grammars.push(grammar);
