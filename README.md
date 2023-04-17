@@ -68,3 +68,13 @@ Steps:
    THIS LINE IS THE 1ST UPPER CASE LINE IN THIS FILE.
    this line is the 1st lower case line in this file.
    ```
+
+### Grammar file from environment variable
+
+We don't want to write a grammar file every time we want to use it. We can use the environment variable `PEGGREP_GRAMMAR` to specify the grammar file:
+
+```bash
+$ export PEGGREP_GRAMMAR="/absolute/path/to/grammar.peg"
+$ peggrep "'this' until['empty']" demo_file
+Two lines above this line is empty.
+```
