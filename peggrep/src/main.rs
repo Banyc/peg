@@ -19,6 +19,10 @@ struct Args {
     /// Select non-matching lines
     #[arg(short('v'), long)]
     invert_match: bool,
+
+    /// Match at the start of a line
+    #[arg(short('^'), long)]
+    start_of_line: bool,
 }
 
 fn main() {
@@ -40,6 +44,7 @@ fn main() {
     // Match
     let match_args = MatchArgs {
         invert_match: args.invert_match,
+        start_of_line: args.start_of_line,
     };
 
     match args.filenames {
@@ -87,6 +92,7 @@ fn print_lines_if_match<R>(
 
 struct MatchArgs {
     invert_match: bool,
+    start_of_line: bool,
 }
 
 fn print_line_if_match(
@@ -97,7 +103,18 @@ fn print_line_if_match(
     args: &MatchArgs,
 ) {
     let (full_matches, _) = matcher.match_(line, filter).unwrap();
-    if full_matches.is_empty() != args.invert_match {
+    let mut matched = false;
+    if !full_matches.is_empty() {
+        matched = true;
+    }
+    if args.start_of_line && matched {
+        let first_match = &full_matches[0];
+        if first_match.start != 0 {
+            matched = false;
+        }
+    }
+
+    if !matched != args.invert_match {
         return;
     }
     match line_prefix {
