@@ -32,6 +32,7 @@ pub enum Token {
     Ident(String),
     /// - e.g.: `0..9`
     /// - e.g.: `0..`
+    /// - e.g.: `3`
     Range(RepeatRange),
     /// `.`
     Dot,
@@ -117,7 +118,8 @@ fn lexer() -> impl Parser<char, Vec<Token>, Error = Simple<char>> {
     let string = choice((string_1, string_2));
 
     let ident = text::ident().map(Token::Ident);
-    let range = text::digits(10)
+    // range_v <- digits '..' digits?
+    let range_v = text::digits(10)
         .then(just(".."))
         .then(text::digits(10).or_not())
         .map(|((start, _), end): ((String, &str), Option<String>)| {
@@ -128,6 +130,14 @@ fn lexer() -> impl Parser<char, Vec<Token>, Error = Simple<char>> {
             };
             Token::Range(RepeatRange::new(start, end))
         });
+    // range <- range_v / digits
+    let range = choice((
+        range_v,
+        text::digits(10).map(|s: String| {
+            let n: usize = s.parse().unwrap();
+            Token::Range(RepeatRange::new(n, RepeatRangeEnd::Finite(n)))
+        }),
+    ));
     let dot = just('.').map(|_| Token::Dot);
     let question = just('?').map(|_| Token::Question);
     let plus = just('+').map(|_| Token::Plus);
